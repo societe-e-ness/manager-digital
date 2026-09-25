@@ -1,0 +1,12 @@
+// Prisma 7 : l'URL de connexion est définie dans prisma.config.ts,
+// et la connexion runtime passe par le driver adapter @prisma/adapter-pg.
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
