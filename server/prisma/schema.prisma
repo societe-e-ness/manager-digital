@@ -10,3 +10,22 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+model User {
+  id         Int      @id @default(autoincrement())
+  name       String
+  email      String   @unique
+  created_at DateTime @default(now())
+}
+
+model Role {
+  id      Int    @id @default(autoincrement())
+  slug    String @unique
+  libelle String
+}
+
+model Feature {
+  id      Int    @id @default(autoincrement())
+  slug    String @unique
+  libelle String
+}
