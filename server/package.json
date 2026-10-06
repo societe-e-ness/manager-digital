@@ -18,7 +18,10 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:cov": "jest --coverage"
   },
   "dependencies": {
     "@nestjs/common": "11.2.6",
@@ -34,8 +37,41 @@
   "devDependencies": {
     "@nestjs/cli": "11.0.24",
     "@nestjs/schematics": "11.1.0",
+    "@nestjs/testing": "11.2.6",
+    "@types/jest": "30.0.0",
     "@types/node": "24.13.6",
+    "jest": "30.5.2",
     "prisma": "7.10.0",
+    "ts-jest": "29.4.14",
     "typescript": "5.9.3"
+  },
+  "jest": {
+    "setupFiles": [
+      "dotenv/config"
+    ],
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": [
+        "ts-jest",
+        {
+          "tsconfig": "<rootDir>/../tsconfig.spec.json"
+        }
+      ]
+    },
+    "collectCoverageFrom": [
+      "**/*.(t|j)s"
+    ],
+    "coverageDirectory": "../coverage",
+    "testEnvironment": "node",
+    "moduleNameMapper": {
+      "^src/(.*)$": "<rootDir>/$1",
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    }
   }
 }
