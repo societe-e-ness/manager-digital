@@ -22,7 +22,14 @@ describe("DatabaseService", () => {
 
   it("should call the User model without problem", async () => {
     const users = await service.user.findMany();
-    console.log(users);
     expect(users).toBeDefined();
+  });
+
+  it("should create a new user", async () => {
+    const randomId = Math.floor(Math.random() * 10000);
+    const user = { email: `test${randomId}@test.com`, name: `test${randomId}` };
+    const result = await service.user.create({ data: user });
+
+    expect(result).toMatchObject(user);
   });
 });
