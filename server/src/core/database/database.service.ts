@@ -1,17 +1,24 @@
-import { Injectable, OnModuleInit } from "@nestjs/common";
+import { Injectable, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "src/generated/prisma/client";
-
-const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL }); // me manque ceci, créer une bdd
+import { ConfigService } from "@nestjs/config";
 
 @Injectable()
-export class DatabaseService extends PrismaClient implements OnModuleInit {
+export class DatabaseService
+  extends PrismaClient
+  implements OnModuleInit, OnModuleDestroy
+{
   // relire expli. intégration Prisma
-  constructor() {
-    super({ adapter });
+  constructor(config: ConfigService) {
+    const connectionString = config.get<string>("DATABASE_URL");
+    super({ adapter: new PrismaPg({ connectionString }) });
   }
 
   async onModuleInit() {
     await this.$connect();
+  }
+
+  async onModuleDestroy() {
+    await this.$disconnect();
   }
 }
