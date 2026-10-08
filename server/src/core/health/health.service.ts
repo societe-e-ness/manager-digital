@@ -15,7 +15,7 @@ export class HealthService {
     return { status: "ok", timestamp: new Date().toISOString() };
   }
 
-  async checkReady() {
+  async checkReady(): Promise<HealthStatus> {
     const timestamp = new Date().toISOString();
     try {
       // pas le seul service testé à terme
