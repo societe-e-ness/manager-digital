@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  HttpStatus,
   HttpCode,
   Param,
   ParseIntPipe,
@@ -13,13 +14,16 @@ import {
   Res,
 } from "@nestjs/common";
 import type { Response } from "express";
+import type { AuthenticatedUser } from "../auth/auth.service";
+import { CurrentUser } from "../auth/session.guard";
+import { ProblemException } from "../problems/problem.exception";
 import { IntegrationsService } from "./integrations.service";
 import { MetaService } from "./meta.service";
 
 /**
  * Toutes les routes du module.
  *
- *   GET    /integrations/oauth/connect?userId=…&clientId=…  → envoie la personne chez Meta
+ *   GET    /integrations/oauth/connect?clientId=…           → envoie la personne chez Meta
  *   GET    /integrations/oauth/callback                      → Meta la renvoie avec un code
  *   GET    /integrations?clientId=…                          → liste les intégrations (et leurs ressources)
  *   GET    /integrations/:id                                 → une intégration et ses ressources
@@ -27,7 +31,8 @@ import { MetaService } from "./meta.service";
  *   PATCH  /integrations/resources/:id                       → rattache une ressource à un site ({ siteId } ou { siteId: null })
  *   DELETE /integrations/:id                                 → déconnecte (supprime aussi les ressources)
  *
- * TODO auth : @UseGuards(JwtAuthGuard), userId depuis la session, contrôle d'accès au client.
+ * Toutes exigent une session (garde globale), callback compris : Meta y renvoie le navigateur.
+ * TODO droits : contrôle d'accès au client (ticket 04).
  */
 @Controller("integrations")
 export class IntegrationsController {
@@ -40,23 +45,33 @@ export class IntegrationsController {
 
   @Get("oauth/connect")
   connect(
-    // TODO auth : userId viendra de la session, pas de la query
-    @Query("userId", ParseIntPipe) userId: number,
-    @Query("clientId") clientId: string | undefined, // absent = accès appartenant à l'agence
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("clientId", new ParseIntPipe({ optional: true })) clientId: number | undefined, // absent = accès de l'agence
     @Res() res: Response,
   ) {
-    const state = this.meta.signState({ userId, clientId: clientId ? Number(clientId) : null });
+    const state = this.meta.signState({ userId: user.id, clientId: clientId ?? null });
     return res.redirect(this.meta.buildAuthorizationUrl(state));
   }
 
   @Get("oauth/callback")
   async callback(
+    @CurrentUser() user: AuthenticatedUser,
     @Query("code") code: string | undefined,
     @Query("state") state: string | undefined,
     @Query("error") error: string | undefined,
   ) {
-    // Pas de guard ici : c'est le state signé qui dit qui connecte quoi.
+    // Le state signé dit qui a lancé la connexion et pour quel client. On vérifie en plus
+    // que c'est bien cette personne qui revient : sinon un state volé permettrait de faire
+    // rattacher le compte Meta d'une victime à la session d'un attaquant.
     const { userId, clientId } = this.meta.verifyState(state);
+    if (userId !== user.id) {
+      throw new ProblemException(
+        HttpStatus.FORBIDDEN,
+        "oauth-state-mismatch",
+        "Connexion Meta lancée par quelqu'un d'autre",
+        "Relancer la connexion Meta depuis votre propre session",
+      );
+    }
 
     if (error || !code) {
       // La personne a refusé le consentement, ou Meta a échoué.
@@ -87,8 +102,8 @@ export class IntegrationsController {
   // --- Gestion des connexions ----------------------------------------------
 
   @Get()
-  async list(@Query("clientId") clientId: string | undefined) {
-    const list = await this.integrations.list(clientId ? Number(clientId) : undefined);
+  async list(@Query("clientId", new ParseIntPipe({ optional: true })) clientId: number | undefined) {
+    const list = await this.integrations.list(clientId);
     return list.map((i) => this.integrations.toPublic(i));
   }
 

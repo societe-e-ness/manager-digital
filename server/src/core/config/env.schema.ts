@@ -7,6 +7,8 @@ const envSchema = z
       .default("development"),
     PORT: z.coerce.number().default(3000),
     APP_PUBLIC_URL: z.url(),
+    // le front : les liens magiques y mènent (obligatoire en production)
+    CLIENT_PUBLIC_URL: z.url().optional(),
 
     DATABASE_URL: z.string().min(1),
     DIRECT_URL: z.string().min(1).optional(),
@@ -26,6 +28,9 @@ const envSchema = z
     META_APP_SECRET: z.string().optional(),
   })
   .superRefine((env, ctx) => {
+    if (env.NODE_ENV === "production" && !env.CLIENT_PUBLIC_URL) {
+      ctx.addIssue({ code: "custom", message: "CLIENT_PUBLIC_URL est requis en production" });
+    }
     if (env.META_ENABLED && !(env.META_APP_ID && env.META_APP_SECRET)) {
       ctx.addIssue({
         code: "custom",
@@ -44,7 +49,7 @@ export function validateEnv(config: Record<string, unknown>): Env {
       `Variables d'environnement invalides :\n${z.prettifyError(result.error)}`,
     );
   }
-  return result.data;
+  return { ...result.data, CLIENT_PUBLIC_URL: result.data.CLIENT_PUBLIC_URL ?? "http://localhost:5173" };
 }
 
 export default envSchema;

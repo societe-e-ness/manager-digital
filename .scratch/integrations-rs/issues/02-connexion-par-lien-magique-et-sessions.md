@@ -4,13 +4,13 @@
 
 **Blocked by:** 01 (Banc de test HTTP et erreurs standard)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Demander un lien pour un email connu crée un lien à usage unique, valable environ 15 minutes, stocké haché
-- [ ] Demander un lien pour un email inconnu renvoie la même réponse, pour ne pas révéler les comptes existants
-- [ ] Valider le lien crée une session (méthode : lien magique) et pose un cookie httpOnly
-- [ ] Un lien déjà utilisé ou expiré est refusé avec une erreur Problem Details
-- [ ] Une session révoquée ou expirée est refusée
-- [ ] Les routes de gestion des Intégrations renvoient 401 sans session
-- [ ] La connexion d'un compte Meta prend l'utilisateur dans la session, plus dans un paramètre de requête
-- [ ] Des tests HTTP couvrent le parcours complet : demande, validation, appel authentifié, déconnexion
+- [x] Demander un lien pour un email connu crée un lien à usage unique, valable environ 15 minutes, stocké haché
+- [x] Demander un lien pour un email inconnu renvoie la même réponse, pour ne pas révéler les comptes existants
+- [x] Valider le lien crée une session (méthode : lien magique) et pose un cookie httpOnly
+- [x] Un lien déjà utilisé ou expiré est refusé avec une erreur Problem Details
+- [x] Une session révoquée ou expirée est refusée
+- [x] Les routes de gestion des Intégrations renvoient 401 sans session
+- [x] La connexion d'un compte Meta prend l'utilisateur dans la session, plus dans un paramètre de requête
+- [x] Des tests HTTP couvrent le parcours complet : demande, validation, appel authentifié, déconnexion

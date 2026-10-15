@@ -1,13 +1,16 @@
 import type { INestApplication } from "@nestjs/common";
-import request from "supertest";
+import type TestAgent from "supertest/lib/agent";
 import { DatabaseService } from "../src/core/database/database.service";
 import { IntegrationsService } from "../src/core/integrations/integrations.service";
 import { createTestApp, resetDatabase } from "./support/app";
+import { loginAs } from "./support/auth";
 import { FakeGraph } from "./support/fake-graph";
 
 describe("Intégrations (HTTP)", () => {
   let app: INestApplication;
   let db: DatabaseService;
+  let agency: TestAgent;
+  let agencyUserId: number;
   const graph = new FakeGraph();
 
   beforeAll(async () => {
@@ -17,6 +20,8 @@ describe("Intégrations (HTTP)", () => {
 
   beforeEach(async () => {
     await resetDatabase(db);
+    agencyUserId = (await db.user.create({ data: { email: "agence@test.fr", type: "AGENCY" } })).id;
+    agency = await loginAs(app, "agence@test.fr");
     graph.install();
   });
 
@@ -31,7 +36,6 @@ describe("Intégrations (HTTP)", () => {
 
   /** Une Intégration Meta en base, avec un jeton chiffré comme en vrai. */
   async function givenIntegration() {
-    const user = await db.user.create({ data: { email: "agence@test.fr", type: "AGENCY" } });
     return db.integration.create({
       data: {
         provider: "META",
@@ -39,13 +43,13 @@ describe("Intégrations (HTTP)", () => {
         access_token: app.get(IntegrationsService).encrypt("user-token"),
         expires_at: new Date(Date.now() + 30 * 24 * 3600 * 1000),
         scopes: ["pages_show_list"],
-        created_by_id: user.id,
+        created_by_id: agencyUserId,
       },
     });
   }
 
   it("une Intégration introuvable renvoie un Problem Details 404 au type stable", async () => {
-    const res = await request(app.getHttpServer())
+    const res = await agency
       .get("/integrations/999")
       .expect(404)
       .expect("Content-Type", /application\/problem\+json/);
@@ -59,7 +63,7 @@ describe("Intégrations (HTTP)", () => {
   });
 
   it("une erreur de validation sans type dédié reste au format Problem Details", async () => {
-    const res = await request(app.getHttpServer())
+    const res = await agency
       .get("/integrations/abc")
       .expect(400)
       .expect("Content-Type", /application\/problem\+json/);
@@ -83,7 +87,7 @@ describe("Intégrations (HTTP)", () => {
       ],
     });
 
-    const res = await request(app.getHttpServer()).post(`/integrations/${integration.id}/resources/sync`).expect(201);
+    const res = await agency.post(`/integrations/${integration.id}/resources/sync`).expect(201);
 
     expect(res.body.resources.map((r: { type: string; name: string }) => [r.type, r.name])).toEqual(
       expect.arrayContaining([

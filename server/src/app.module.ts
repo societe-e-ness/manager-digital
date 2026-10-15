@@ -2,6 +2,7 @@ import { Module } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { APP_FILTER } from "@nestjs/core";
 import { ScheduleModule } from "@nestjs/schedule";
+import { AuthModule } from "./core/auth/auth.module";
 import { DatabaseModule } from "./core/database/database.module";
 import { HealthModule } from "./core/health/health.module";
 import { IntegrationsModule } from "./core/integrations/integrations.module";
@@ -18,6 +19,7 @@ import { ProblemDetailsFilter } from "./core/problems/problem-details.filter";
     }),
     ScheduleModule.forRoot(),
     DatabaseModule,
+    AuthModule,
     HealthModule,
     IntegrationsModule,
   ],
