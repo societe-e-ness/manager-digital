@@ -1,8 +1,9 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { HttpStatus, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import type { Prisma, ResourceType } from "../../generated/prisma/client";
 import { DatabaseService } from "../database/database.service";
+import { ProblemException } from "../problems/problem.exception";
 
 /** Une ressource telle que MetaService la renvoie, avant écriture en base. */
 export interface ResourceInput {
@@ -37,7 +38,7 @@ export class IntegrationsService {
 
   async findById(id: number) {
     const integration = await this.db.integration.findUnique({ where: { id }, include: { resources: true } });
-    if (!integration) throw new NotFoundException(`Intégration ${id} introuvable`);
+    if (!integration) throw new ProblemException(HttpStatus.NOT_FOUND, "integration-not-found", "Intégration introuvable", `Intégration ${id} introuvable`);
     return integration;
   }
 
@@ -124,7 +125,7 @@ export class IntegrationsService {
 
   async findResourceById(id: number) {
     const resource = await this.db.integrationResource.findUnique({ where: { id }, include: { integration: true } });
-    if (!resource) throw new NotFoundException(`Ressource ${id} introuvable`);
+    if (!resource) throw new ProblemException(HttpStatus.NOT_FOUND, "resource-not-found", "Ressource introuvable", `Ressource ${id} introuvable`);
     return resource;
   }
 

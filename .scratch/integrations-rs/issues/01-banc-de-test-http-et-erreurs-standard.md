@@ -4,12 +4,12 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Une commande lance les tests HTTP contre une application Nest complète et une base de test, remise à zéro entre les tests
-- [ ] Un faux Graph Meta intercepte les appels vers Meta. Un appel non prévu fait échouer le test au lieu de partir sur le réseau
-- [ ] Les erreurs de l'API sont renvoyées au format Problem Details (`type`, `title`, `status`, `detail`), avec le bon type de contenu
-- [ ] Un test HTTP vérifie la route de santé
-- [ ] Un test HTTP vérifie qu'une Intégration introuvable renvoie une erreur 404 au format Problem Details, avec un `type` stable
-- [ ] La dépendance de développement ajoutée pour les requêtes HTTP est une version stable, épinglée exactement et vérifiée sur npm
-- [ ] Les tests unitaires existants (chiffrement, state signé) passent toujours
+- [x] Une commande lance les tests HTTP contre une application Nest complète et une base de test, remise à zéro entre les tests
+- [x] Un faux Graph Meta intercepte les appels vers Meta. Un appel non prévu fait échouer le test au lieu de partir sur le réseau
+- [x] Les erreurs de l'API sont renvoyées au format Problem Details (`type`, `title`, `status`, `detail`), avec le bon type de contenu
+- [x] Un test HTTP vérifie la route de santé
+- [x] Un test HTTP vérifie qu'une Intégration introuvable renvoie une erreur 404 au format Problem Details, avec un `type` stable
+- [x] La dépendance de développement ajoutée pour les requêtes HTTP est une version stable, épinglée exactement et vérifiée sur npm
+- [x] Les tests unitaires existants (chiffrement, state signé) passent toujours

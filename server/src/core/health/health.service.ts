@@ -1,4 +1,4 @@
-import { Injectable } from "@nestjs/common";
+import { Injectable, Logger } from "@nestjs/common";
 import { DatabaseService } from "../database/database.service";
 
 export type HealthStatus = {
@@ -9,6 +9,8 @@ export type HealthStatus = {
 
 @Injectable()
 export class HealthService {
+  private readonly logger = new Logger(HealthService.name);
+
   constructor(private readonly databaseService: DatabaseService) {}
 
   check(): HealthStatus {
@@ -26,8 +28,9 @@ export class HealthService {
         details: { database: "up" },
       };
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      return { status: "error", timestamp, details: { database: message } };
+      // le message du driver (hôte, utilisateur…) reste dans les logs : la route est publique
+      this.logger.error(`Base de données injoignable : ${e instanceof Error ? e.message : String(e)}`);
+      return { status: "error", timestamp, details: { database: "down" } };
     }
   }
 }
