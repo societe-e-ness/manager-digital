@@ -1,5 +1,5 @@
 // Données de départ pour le développement : un utilisateur agence, un client,
-// un site, et les trois premières fonctionnalités.
+// un site, et les fonctionnalités (dont social.*, voir core/rights).
 // Relançable sans doublons : tout passe par des upsert sur les champs uniques.
 //
 //   npx prisma db seed     (déclaré dans prisma.config.ts)
@@ -21,6 +21,9 @@ const FEATURES = [
   { slug: "ads.read", label: "Lire les campagnes publicitaires" },
   { slug: "ai_summary.read", label: "Lire les synthèses IA" },
   { slug: "comments.update", label: "Répondre aux commentaires" },
+  { slug: "social.read", label: "Lister les publications des réseaux sociaux" },
+  { slug: "social.publish", label: "Diffuser une actualité sur les réseaux sociaux" },
+  { slug: "social.manage", label: "Gérer les comptes et pages des réseaux sociaux" },
 ];
 
 async function main() {

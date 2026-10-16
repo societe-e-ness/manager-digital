@@ -4,6 +4,10 @@
 
 **Blocked by:** 04 (Droits social.*), 05 (Une page = une Ressource)
 
+Points relevés à la revue du ticket 04 :
+- Le callback OAuth réutilise une Intégration existante sur `external_user_id` sans tenir compte de son Client : reconnecter pour le Client A un compte Meta déjà connecté pour le Client B met à jour l'Intégration de B et la renvoie.
+- `GET /integrations?clientId=…` renvoie les Intégrations du Client, pas encore les Ressources rattachées à ses Sites par d'autres.
+
 **Status:** ready-for-agent
 
 - [ ] Rattacher une Ressource à un Site exige `social.manage` sur ce Site

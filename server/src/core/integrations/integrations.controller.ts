@@ -17,6 +17,7 @@ import type { Response } from "express";
 import type { AuthenticatedUser } from "../auth/auth.service";
 import { CurrentUser } from "../auth/session.guard";
 import { ProblemException } from "../problems/problem.exception";
+import { Features, RightsService } from "../rights/rights.service";
 import { IntegrationsService } from "./integrations.service";
 import { MetaService } from "./meta.service";
 
@@ -31,24 +32,44 @@ import { MetaService } from "./meta.service";
  *   PATCH  /integrations/resources/:id                       → rattache une ressource à un site ({ siteId } ou { siteId: null })
  *   DELETE /integrations/:id                                 → déconnecte (supprime aussi les ressources)
  *
- * Toutes exigent une session (garde globale), callback compris : Meta y renvoie le navigateur.
- * TODO droits : contrôle d'accès au client (ticket 04).
+ * Toutes exigent une session (garde globale), callback compris : Meta y renvoie le navigateur,
+ * et `social.manage` : sur le Site visé et sur le Site actuel de la Ressource pour un rattachement
+ * ou un détachement, sinon sur au moins un Site du Client concerné. Un accès de l'agence
+ * (sans Client), comme la liste de tous les Clients, est réservé aux Utilisateurs agence.
  */
 @Controller("integrations")
 export class IntegrationsController {
   constructor(
     private readonly integrations: IntegrationsService,
     private readonly meta: MetaService,
+    private readonly rights: RightsService,
   ) {}
+
+  /**
+   * social.manage sur au moins un Site du Client. Sans Client (accès de l'agence, ou tous les Clients) :
+   * sur n'importe quel Site, et réservé aux Utilisateurs agence.
+   */
+  private async requireManage(user: AuthenticatedUser, clientId: number | null | undefined) {
+    await this.rights.requireFeature(user, Features.SOCIAL_MANAGE, { clientId: clientId ?? undefined });
+    if (clientId == null && user.type !== "AGENCY") {
+      throw new ProblemException(
+        HttpStatus.FORBIDDEN,
+        "agency-only",
+        "Réservé à l'agence",
+        "Les accès de l'agence ne se gèrent que par un Utilisateur agence : préciser le Client (clientId)",
+      );
+    }
+  }
 
   // --- OAuth ----------------------------------------------------------------
 
   @Get("oauth/connect")
-  connect(
+  async connect(
     @CurrentUser() user: AuthenticatedUser,
     @Query("clientId", new ParseIntPipe({ optional: true })) clientId: number | undefined, // absent = accès de l'agence
     @Res() res: Response,
   ) {
+    await this.requireManage(user, clientId);
     const state = this.meta.signState({ userId: user.id, clientId: clientId ?? null });
     return res.redirect(this.meta.buildAuthorizationUrl(state));
   }
@@ -78,6 +99,9 @@ export class IntegrationsController {
       throw new BadRequestException(`Connexion Meta refusée : ${error ?? "code manquant"}`);
     }
 
+    // Le droit a pu être retiré depuis le départ chez Meta : on le revérifie avant tout appel.
+    await this.requireManage(user, clientId);
+
     // 1. code → jeton de 60 jours
     const token = await this.meta.exchangeCode(code);
     // 2. qui est-ce, et quelles permissions a-t-elle accordées
@@ -102,33 +126,53 @@ export class IntegrationsController {
   // --- Gestion des connexions ----------------------------------------------
 
   @Get()
-  async list(@Query("clientId", new ParseIntPipe({ optional: true })) clientId: number | undefined) {
+  async list(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("clientId", new ParseIntPipe({ optional: true })) clientId: number | undefined,
+  ) {
+    await this.requireManage(user, clientId);
     const list = await this.integrations.list(clientId);
     return list.map((i) => this.integrations.toPublic(i));
   }
 
   @Get(":id")
-  async get(@Param("id", ParseIntPipe) id: number) {
-    return this.integrations.toPublic(await this.integrations.findById(id));
+  async get(@CurrentUser() user: AuthenticatedUser, @Param("id", ParseIntPipe) id: number) {
+    const integration = await this.integrations.findById(id);
+    await this.requireManage(user, integration.client_id);
+    return this.integrations.toPublic(integration);
   }
 
   @Post(":id/resources/sync")
-  async syncResources(@Param("id", ParseIntPipe) id: number) {
+  async syncResources(@CurrentUser() user: AuthenticatedUser, @Param("id", ParseIntPipe) id: number) {
     const integration = await this.integrations.findById(id);
+    await this.requireManage(user, integration.client_id);
     await this.integrations.syncResources(id, await this.meta.fetchResources(integration));
     return this.integrations.toPublic(await this.integrations.findById(id));
   }
 
   @Patch("resources/:id")
-  async attachResource(@Param("id", ParseIntPipe) id: number, @Body() body: { siteId?: number | null }) {
-    if (body?.siteId === undefined) throw new BadRequestException("siteId requis (nombre, ou null pour détacher)");
-    const { access_token, ...resource } = await this.integrations.attachResourceToSite(id, body.siteId);
+  async attachResource(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param("id", ParseIntPipe) id: number,
+    @Body() body: { siteId?: unknown },
+  ) {
+    const target = body?.siteId;
+    if (target !== null && (typeof target !== "number" || !Number.isInteger(target))) {
+      throw new BadRequestException("siteId requis (nombre, ou null pour détacher)");
+    }
+    // Droit sur le Site visé et sur le Site actuel : on ne prend pas la Ressource d'un autre Site.
+    const current = await this.integrations.findResourceById(id);
+    const sites = [...new Set([target, current.site_id])].filter((siteId) => siteId !== null);
+    for (const siteId of sites) await this.rights.requireFeature(user, Features.SOCIAL_MANAGE, { siteId });
+    if (sites.length === 0) await this.requireManage(user, current.integration.client_id); // ni rattachée ni à rattacher
+    const { access_token, ...resource } = await this.integrations.attachResourceToSite(id, target);
     return resource;
   }
 
   @Delete(":id")
   @HttpCode(204)
-  async disconnect(@Param("id", ParseIntPipe) id: number) {
+  async disconnect(@CurrentUser() user: AuthenticatedUser, @Param("id", ParseIntPipe) id: number) {
+    await this.requireManage(user, (await this.integrations.findById(id)).client_id);
     await this.integrations.disconnect(id);
   }
 }

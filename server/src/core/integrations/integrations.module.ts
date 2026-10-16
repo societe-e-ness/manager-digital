@@ -1,5 +1,6 @@
 import { Module } from "@nestjs/common";
 import { DatabaseModule } from "../database/database.module";
+import { RightsModule } from "../rights/rights.module";
 import { IntegrationsController } from "./integrations.controller";
 import { IntegrationsService } from "./integrations.service";
 import { MetaService } from "./meta.service";
@@ -11,7 +12,7 @@ import { TokenRefreshJob } from "./token-refresh.job";
  * et MetaService (quelles données ?).
  */
 @Module({
-  imports: [DatabaseModule],
+  imports: [DatabaseModule, RightsModule],
   controllers: [IntegrationsController],
   providers: [IntegrationsService, MetaService, TokenRefreshJob],
   exports: [IntegrationsService, MetaService],

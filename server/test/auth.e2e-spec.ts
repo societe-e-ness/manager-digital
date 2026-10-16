@@ -3,10 +3,12 @@ import request from "supertest";
 import { DatabaseService } from "../src/core/database/database.service";
 import { createTestApp, magicLinks, resetDatabase } from "./support/app";
 import { loginAs, tokenFromLink } from "./support/auth";
+import { givenFeatureOnOwnSite } from "./support/rights";
 
 describe("Connexion par lien magique et sessions (HTTP)", () => {
   let app: INestApplication;
   let db: DatabaseService;
+  let marieClientId: number;
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -16,7 +18,8 @@ describe("Connexion par lien magique et sessions (HTTP)", () => {
   beforeEach(async () => {
     await resetDatabase(db);
     magicLinks(app).sent.length = 0;
-    await db.user.create({ data: { email: "marie@client-a.fr", name: "Marie", type: "CLIENT" } });
+    const marie = await db.user.create({ data: { email: "marie@client-a.fr", name: "Marie", type: "CLIENT" } });
+    marieClientId = (await givenFeatureOnOwnSite(db, marie.id, "social.manage")).client_id;
   });
 
   afterAll(async () => {
@@ -109,7 +112,7 @@ describe("Connexion par lien magique et sessions (HTTP)", () => {
 
       const me = await agent.get("/auth/me").expect(200);
       expect(me.body.email).toBe("marie@client-a.fr");
-      await agent.get("/integrations").expect(200);
+      await agent.get(`/integrations?clientId=${marieClientId}`).expect(200);
 
       await agent.post("/auth/logout").expect(204);
 
@@ -163,7 +166,7 @@ describe("Connexion par lien magique et sessions (HTTP)", () => {
       const marie = await db.user.findUniqueOrThrow({ where: { email: "marie@client-a.fr" } });
       const agent = await loginAs(app, "marie@client-a.fr");
 
-      const res = await agent.get("/integrations/oauth/connect?userId=999").expect(302);
+      const res = await agent.get(`/integrations/oauth/connect?clientId=${marieClientId}&userId=999`).expect(302);
 
       const state = new URL(res.headers.location).searchParams.get("state")!;
       const payload = JSON.parse(Buffer.from(state.split(".")[0], "base64url").toString("utf8"));
@@ -176,12 +179,13 @@ describe("Connexion par lien magique et sessions (HTTP)", () => {
     });
 
     it("refuse un retour de Meta dont le state a été lancé par quelqu'un d'autre", async () => {
-      await db.user.create({ data: { email: "pirate@test.fr", type: "CLIENT" } });
+      const { id: pirateId } = await db.user.create({ data: { email: "pirate@test.fr", type: "CLIENT" } });
+      const pirateClientId = (await givenFeatureOnOwnSite(db, pirateId, "social.manage")).client_id;
       const pirate = await loginAs(app, "pirate@test.fr");
       const marie = await loginAs(app, "marie@client-a.fr");
 
       // le pirate lance la connexion et récupère son state signé…
-      const started = await pirate.get("/integrations/oauth/connect").expect(302);
+      const started = await pirate.get(`/integrations/oauth/connect?clientId=${pirateClientId}`).expect(302);
       const state = new URL(started.headers.location).searchParams.get("state")!;
 
       // …que Marie termine depuis sa propre session : refusé avant tout appel à Meta

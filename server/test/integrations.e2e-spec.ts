@@ -5,6 +5,7 @@ import { IntegrationsService } from "../src/core/integrations/integrations.servi
 import { createTestApp, resetDatabase } from "./support/app";
 import { loginAs } from "./support/auth";
 import { FakeGraph } from "./support/fake-graph";
+import { givenFeatureOnOwnSite } from "./support/rights";
 
 describe("Intégrations (HTTP)", () => {
   let app: INestApplication;
@@ -21,6 +22,7 @@ describe("Intégrations (HTTP)", () => {
   beforeEach(async () => {
     await resetDatabase(db);
     agencyUserId = (await db.user.create({ data: { email: "agence@test.fr", type: "AGENCY" } })).id;
+    await givenFeatureOnOwnSite(db, agencyUserId, "social.manage");
     agency = await loginAs(app, "agence@test.fr");
     graph.install();
   });
