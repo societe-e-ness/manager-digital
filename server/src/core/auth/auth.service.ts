@@ -20,7 +20,6 @@ export interface AuthenticatedUser {
   email: string;
   name: string | null;
   type: UserType;
-  role: string | null; // rôle auth.eness (session SSO uniquement)
 }
 
 /**
@@ -81,7 +80,7 @@ export class AuthService {
       return tx.session.create({ data: newSession(sessionToken, user_id, "MAGIC_LINK", userAgent), include: { user: true } });
     });
 
-    return { sessionToken, expiresAt: session.expires_at, user: toAuthenticatedUser(session.user, session) };
+    return { sessionToken, expiresAt: session.expires_at, user: toAuthenticatedUser(session.user) };
   }
 
   // --- SSO --------------------------------------------------------------------
@@ -103,14 +102,13 @@ export class AuthService {
     const session = await this.db.session.create({
       data: {
         ...newSession(sessionToken, user.id, "SSO", userAgent),
-        role: identity.role,
         sso_sid: identity.sid,
         id_token: identity.idToken,
         refresh_token: identity.refreshToken,
         checked_at: new Date(),
       },
     });
-    return { sessionToken, expiresAt: session.expires_at, user: toAuthenticatedUser(user, session) };
+    return { sessionToken, expiresAt: session.expires_at, user: toAuthenticatedUser(user) };
   }
 
   /**
@@ -146,7 +144,7 @@ export class AuthService {
       await this.db.session.update({ where: { id: session.id }, data: { expires_at: expiresAt } });
     }
 
-    return { user: toAuthenticatedUser(session.user, session), expiresAt, extended };
+    return { user: toAuthenticatedUser(session.user), expiresAt, extended };
   }
 
   /** Révoque la session et la renvoie (pour la déconnexion côté auth.eness), ou null. */
@@ -199,7 +197,7 @@ export class AuthService {
     });
     if (count === 0) return {};
 
-    const fresh = await this.sso.recheck(session.refresh_token, session.role);
+    const fresh = await this.sso.recheck(session.refresh_token);
     if (fresh.status === "unavailable") return {}; // panne : on garde la session, nouvel essai dans 10 minutes
     if (fresh.status === "lost") {
       await this.db.session.update({ where: { id: session.id }, data: { revoked_at: new Date() } });
@@ -208,7 +206,6 @@ export class AuthService {
     return this.db.session.update({
       where: { id: session.id },
       data: {
-        role: fresh.role,
         id_token: fresh.idToken ?? session.id_token,
         refresh_token: fresh.refreshToken ?? session.refresh_token,
       },
@@ -234,6 +231,6 @@ function newSession(sessionToken: string, userId: number, method: LoginMethod, u
   };
 }
 
-function toAuthenticatedUser({ id, email, name, type }: User, session: Pick<Session, "role">): AuthenticatedUser {
-  return { id, email, name, type, role: session.role };
+function toAuthenticatedUser({ id, email, name, type }: User): AuthenticatedUser {
+  return { id, email, name, type };
 }

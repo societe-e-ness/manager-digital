@@ -6,10 +6,6 @@ import type { UserType } from "../../generated/prisma/client";
 import { decrypt, encrypt, encryptionKey } from "../crypto/encryption";
 import { ProblemException } from "../problems/problem.exception";
 
-/** Les rôles déclarés pour le Manager Digital dans auth.eness, du moins au plus privilégié. */
-export const SSO_ROLES = ["lecteur", "editeur", "admin"] as const;
-export type SsoRole = (typeof SSO_ROLES)[number];
-
 const FLOW_TTL_MS = 10 * 60 * 1000;
 const BACKCHANNEL_EVENT = "http://schemas.openid.net/event/backchannel-logout";
 
@@ -29,7 +25,6 @@ export interface SsoIdentity {
   emailVerified: boolean; // seul un email vérifié permet de rattacher un compte existant
   name?: string;
   type?: UserType; // traduit depuis le claim `type` (staff / client)
-  role: SsoRole;
   sid?: string;
   idToken: string;
   refreshToken?: string; // CHIFFRÉ
@@ -70,7 +65,8 @@ export class SsoService {
 
     const url = client.buildAuthorizationUrl(oidc, {
       redirect_uri: this.callbackUrl,
-      scope: "openid email profile roles", // `roles` : le rôle arrive dans l'ID token
+      // pas de scope `roles` : auth.eness ne sert qu'à dire qui entre, les droits sont gérés ici
+      scope: "openid email profile",
       code_challenge: await client.calculatePKCECodeChallenge(flow.codeVerifier),
       code_challenge_method: "S256",
       state: flow.state,
@@ -122,23 +118,12 @@ export class SsoService {
     }
 
     const claims = tokens.claims()!;
-    const role = validRole(claims.roles);
-    if (!role) {
-      throw new ProblemException(
-        HttpStatus.FORBIDDEN,
-        "sso-role-invalid",
-        "Aucun rôle sur le Manager Digital",
-        "auth.eness n'attribue aucun rôle connu à ce compte sur le Manager Digital",
-      );
-    }
-
     return {
       sub: claims.sub,
       email: String(claims.email ?? ""),
       emailVerified: claims.email_verified === true,
       name: typeof claims.name === "string" ? claims.name : undefined,
       type: claims.type === "staff" ? "AGENCY" : claims.type === "client" ? "CLIENT" : undefined,
-      role,
       sid: typeof claims.sid === "string" ? claims.sid : undefined,
       idToken: tokens.id_token!,
       refreshToken: tokens.refresh_token ? encrypt(this.key, tokens.refresh_token) : undefined,
@@ -148,15 +133,14 @@ export class SsoService {
   // --- Revérification ---------------------------------------------------------
 
   /**
-   * Redemande à auth.eness si la personne a toujours accès (auth relit les droits à
+   * Redemande à auth.eness si la personne a toujours accès (auth relit les accès à
    * chaque refresh). Trois issues :
-   *  - "ok" : accès confirmé, avec le rôle à jour ;
-   *  - "lost" : auth.eness refuse (accès retiré, compte désactivé, rôle modifié — ce qui
-   *    révoque les jetons —, refresh expiré) ou ne donne plus de rôle connu ;
+   *  - "ok" : accès confirmé ;
+   *  - "lost" : auth.eness refuse (accès retiré, compte désactivé, refresh expiré) ;
    *  - "unavailable" : auth.eness injoignable ou SSO désactivé. On ne déconnecte pas
-   *    pour une panne : la session garde son rôle et sera revérifiée plus tard.
+   *    pour une panne : la session sera revérifiée plus tard.
    */
-  async recheck(encryptedRefreshToken: string | null, currentRole: string | null): Promise<SsoRecheck> {
+  async recheck(encryptedRefreshToken: string | null): Promise<SsoRecheck> {
     if (!encryptedRefreshToken) return { status: "lost" };
 
     let tokens: Awaited<ReturnType<typeof client.refreshTokenGrant>>;
@@ -172,12 +156,8 @@ export class SsoService {
       return { status: "unavailable" };
     }
 
-    // sans nouvel ID token, le rôle ne peut pas avoir changé : on garde le précédent
-    const role = tokens.id_token ? validRole(tokens.claims()?.roles) : validRole([currentRole]);
-    if (!role) return { status: "lost" };
     return {
       status: "ok",
-      role,
       idToken: tokens.id_token,
       // auth.eness peut renouveler le refresh token : on garde le plus récent
       refreshToken: tokens.refresh_token ? encrypt(this.key, tokens.refresh_token) : undefined,
@@ -261,15 +241,9 @@ export class SsoService {
 }
 
 export type SsoRecheck =
-  | { status: "ok"; role: SsoRole; idToken?: string; refreshToken?: string }
+  | { status: "ok"; idToken?: string; refreshToken?: string }
   | { status: "lost" }
   | { status: "unavailable" };
-
-/** Le rôle, s'il est connu. Absent ou inconnu vaut refus. */
-function validRole(roles: unknown): SsoRole | null {
-  const role = Array.isArray(roles) ? roles[0] : undefined;
-  return SSO_ROLES.includes(role) ? (role as SsoRole) : null;
-}
 
 /** N'accepte qu'un chemin local, sinon c'est une redirection ouverte. */
 export function safeReturnTo(path: unknown) {

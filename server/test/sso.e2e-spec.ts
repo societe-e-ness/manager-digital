@@ -32,8 +32,8 @@ describe("Connexion SSO auth.eness (HTTP)", () => {
     await auth.install();
     await db.user.create({ data: { email: "jeanne@eness.fr", name: "Jeanne", type: "AGENCY" } });
     await db.user.create({ data: { email: "marie@client-a.fr", name: "Marie", type: "CLIENT" } });
-    auth.addAccount({ sub: "sub-jeanne", email: "jeanne@eness.fr", type: "staff", roles: ["admin"] });
-    auth.addAccount({ sub: "sub-marie", email: "marie@client-a.fr", type: "client", roles: ["lecteur"] });
+    auth.addAccount({ sub: "sub-jeanne", email: "jeanne@eness.fr", type: "staff" });
+    auth.addAccount({ sub: "sub-marie", email: "marie@client-a.fr", type: "client" });
   });
 
   afterEach(() => {
@@ -54,14 +54,15 @@ describe("Connexion SSO auth.eness (HTTP)", () => {
   }
 
   describe("aller vers auth.eness", () => {
-    it("redirige avec state, nonce, PKCE S256, resource et le scope roles", async () => {
+    it("redirige avec state, nonce, PKCE S256 et resource, sans demander de rôles", async () => {
       const res = await request(app.getHttpServer()).get("/auth/sso/login").expect(302);
 
       const url = new URL(res.headers.location);
       expect(`${url.origin}${url.pathname}`).toBe(`${ISSUER}/auth`);
       expect(url.searchParams.get("client_id")).toBe(CLIENT_ID);
       expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3000/auth/sso/callback");
-      expect(url.searchParams.get("scope")?.split(" ")).toEqual(expect.arrayContaining(["openid", "email", "roles"]));
+      expect(url.searchParams.get("scope")?.split(" ")).toEqual(expect.arrayContaining(["openid", "email"]));
+      expect(url.searchParams.get("scope")?.split(" ")).not.toContain("roles");
       expect(url.searchParams.get("code_challenge_method")).toBe("S256");
       expect(url.searchParams.get("code_challenge")).toBeTruthy();
       expect(url.searchParams.get("state")).toBeTruthy();
@@ -79,7 +80,7 @@ describe("Connexion SSO auth.eness (HTTP)", () => {
       expect(callback.headers.location).toBe(`${FRONT}/integrations`);
 
       const me = await agent.get("/auth/me").expect(200);
-      expect(me.body).toMatchObject({ email: "jeanne@eness.fr", type: "AGENCY", role: "admin" });
+      expect(me.body).toMatchObject({ email: "jeanne@eness.fr", type: "AGENCY" });
 
       const jeanne = await db.user.findUniqueOrThrow({ where: { email: "jeanne@eness.fr" } });
       expect(jeanne.sso_subject).toBe("sub-jeanne");
@@ -88,10 +89,10 @@ describe("Connexion SSO auth.eness (HTTP)", () => {
       expect(session.refresh_token).not.toBeNull();
     });
 
-    it("connecte aussi un Utilisateur client, avec son rôle", async () => {
+    it("connecte aussi un Utilisateur client", async () => {
       const { agent } = await ssoLogin("sub-marie");
       const me = await agent.get("/auth/me").expect(200);
-      expect(me.body).toMatchObject({ email: "marie@client-a.fr", type: "CLIENT", role: "lecteur" });
+      expect(me.body).toMatchObject({ email: "marie@client-a.fr", type: "CLIENT" });
     });
 
     it("retrouve ensuite la personne par son sub, même si son email a changé", async () => {
@@ -137,14 +138,6 @@ describe("Connexion SSO auth.eness (HTTP)", () => {
       expectFrontError(callback, "sso-unknown-user");
     });
 
-    it.each([[[]], [["superadmin"]], [undefined]])("refuse un rôle absent ou inconnu (%j)", async (roles) => {
-      auth.accounts.get("sub-jeanne")!.roles = roles;
-
-      const { callback } = await ssoLogin("sub-jeanne");
-
-      expectFrontError(callback, "sso-role-invalid");
-      expect(await db.session.count()).toBe(0);
-    });
 
     it.each(["//evil.example", "https://evil.example/", "javascript:alert(1)"])(
       "ignore un returnTo qui n'est pas un chemin local (%s)",
@@ -175,6 +168,17 @@ describe("Connexion SSO auth.eness (HTTP)", () => {
       await db.session.updateMany({ data: { checked_at: new Date(Date.now() - TEN_MINUTES - 1000) } });
     }
 
+    it("après 10 minutes, confirme l'accès auprès d'auth.eness", async () => {
+      const { agent } = await ssoLogin("sub-jeanne");
+      const before = auth.tokenRequests;
+      await ageCheck();
+
+      await agent.get("/auth/me").expect(200);
+
+      expect(auth.tokenRequests).toBe(before + 1);
+      expect((await db.session.findFirstOrThrow()).checked_at!.getTime()).toBeGreaterThan(Date.now() - 5000);
+    });
+
     it("ne redemande rien à auth.eness avant 10 minutes", async () => {
       const { agent } = await ssoLogin("sub-jeanne");
       const before = auth.tokenRequests;
@@ -184,15 +188,6 @@ describe("Connexion SSO auth.eness (HTTP)", () => {
       expect(auth.tokenRequests).toBe(before);
     });
 
-    it("après 10 minutes, prend en compte un changement de rôle", async () => {
-      const { agent } = await ssoLogin("sub-jeanne");
-      auth.accounts.get("sub-jeanne")!.roles = ["editeur"];
-      await ageCheck();
-
-      const me = await agent.get("/auth/me").expect(200);
-
-      expect(me.body.role).toBe("editeur");
-    });
 
     it("après 10 minutes, coupe la session si l'accès a été retiré", async () => {
       const { agent } = await ssoLogin("sub-jeanne");
@@ -210,9 +205,8 @@ describe("Connexion SSO auth.eness (HTTP)", () => {
       auth.down = true;
       await ageCheck();
 
-      const me = await agent.get("/auth/me").expect(200);
+      await agent.get("/auth/me").expect(200);
 
-      expect(me.body.role).toBe("admin");
       expect((await db.session.findFirstOrThrow()).revoked_at).toBeNull();
     });
 

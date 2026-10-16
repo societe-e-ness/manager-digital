@@ -196,7 +196,6 @@ model Session {
   created_at DateTime    @default(now())
 
   // --- SSO uniquement (null pour un lien magique)
-  role          String? // rôle auth.eness sur le Manager Digital, relu à chaque revérification
   sso_sid       String? // session SSO d'auth.eness : cible du back-channel logout
   id_token      String? // requis pour la déconnexion côté auth.eness (id_token_hint)
   refresh_token String? // CHIFFRÉ (AES-256-GCM) : sert à revérifier l'accès

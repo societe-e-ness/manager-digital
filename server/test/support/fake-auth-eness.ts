@@ -14,7 +14,6 @@ export interface FakeAccount {
   emailVerified?: boolean; // vrai par défaut
   name?: string;
   type?: "staff" | "client";
-  roles?: string[]; // [] ou absent = aucun rôle
   hasAccess?: boolean; // false = accès retiré : le refresh échoue
 }
 
@@ -58,7 +57,7 @@ export class FakeAuthEness {
   }
 
   addAccount(account: FakeAccount) {
-    this.accounts.set(account.sub, { type: "staff", roles: ["admin"], hasAccess: true, emailVerified: true, ...account });
+    this.accounts.set(account.sub, { type: "staff", hasAccess: true, emailVerified: true, ...account });
     return this;
   }
 
@@ -156,7 +155,6 @@ export class FakeAuthEness {
       email_verified: account.emailVerified,
       name: account.name,
       type: account.type,
-      roles: account.roles,
       sid,
       ...(nonce ? { nonce } : {}),
     };
