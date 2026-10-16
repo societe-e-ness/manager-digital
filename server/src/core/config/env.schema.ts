@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+// une URL facultative : "" (valeur vide de .env.example) vaut absence
+const optionalUrl = z.preprocess((v) => (v === "" ? undefined : v), z.url().optional());
+
 const envSchema = z
   .object({
     NODE_ENV: z
@@ -8,7 +11,7 @@ const envSchema = z
     PORT: z.coerce.number().default(3000),
     APP_PUBLIC_URL: z.url(),
     // le front : les liens magiques y mènent (obligatoire en production)
-    CLIENT_PUBLIC_URL: z.url().optional(),
+    CLIENT_PUBLIC_URL: optionalUrl,
 
     DATABASE_URL: z.string().min(1),
     DIRECT_URL: z.string().min(1).optional(),
@@ -26,8 +29,21 @@ const envSchema = z
     META_ENABLED: z.stringbool().default(false),
     META_APP_ID: z.string().optional(),
     META_APP_SECRET: z.string().optional(),
+
+    // --- SSO auth.eness (OpenID Connect) ---
+    SSO_ENABLED: z.stringbool().default(false),
+    OIDC_ISSUER: optionalUrl, // https://auth.eness.fr
+    OIDC_CLIENT_ID: z.string().optional(),
+    OIDC_CLIENT_SECRET: z.string().optional(),
+    OIDC_RESOURCE: optionalUrl, // la valeur affichée par auth, slash final compris
   })
   .superRefine((env, ctx) => {
+    if (env.SSO_ENABLED && !(env.OIDC_ISSUER && env.OIDC_CLIENT_ID && env.OIDC_CLIENT_SECRET && env.OIDC_RESOURCE)) {
+      ctx.addIssue({
+        code: "custom",
+        message: "OIDC_ISSUER, OIDC_CLIENT_ID, OIDC_CLIENT_SECRET et OIDC_RESOURCE sont requis quand SSO_ENABLED=true",
+      });
+    }
     if (env.NODE_ENV === "production" && !env.CLIENT_PUBLIC_URL) {
       ctx.addIssue({ code: "custom", message: "CLIENT_PUBLIC_URL est requis en production" });
     }

@@ -1,7 +1,7 @@
 import { HttpStatus, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import type { Prisma, ResourceType } from "../../generated/prisma/client";
+import { decrypt, encrypt, encryptionKey } from "../crypto/encryption";
 import { DatabaseService } from "../database/database.service";
 import { ProblemException } from "../problems/problem.exception";
 
@@ -31,7 +31,7 @@ export class IntegrationsService {
     private readonly db: DatabaseService,
     config: ConfigService,
   ) {
-    this.encryptionKey = Buffer.from(config.getOrThrow<string>("ENCRYPTION_KEY"), "base64");
+    this.encryptionKey = encryptionKey(config.getOrThrow<string>("ENCRYPTION_KEY"));
   }
 
   // --- Intégrations -------------------------------------------------------
@@ -154,23 +154,13 @@ export class IntegrationsService {
     };
   }
 
-  // --- Chiffrement AES-256-GCM --------------------------------------------
-  // Valeur stockée (base64) : [ IV 12 octets | tag 16 octets | données chiffrées ]
-  //  - l'IV est aléatoire : deux chiffrements du même texte donnent deux résultats
-  //  - le tag garantit que la valeur n'a pas été modifiée en base
+  // --- Chiffrement AES-256-GCM (voir core/crypto) --------------------------
 
   encrypt(plain: string) {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv("aes-256-gcm", this.encryptionKey, iv);
-    const data = Buffer.concat([cipher.update(plain, "utf8"), cipher.final()]);
-    return Buffer.concat([iv, cipher.getAuthTag(), data]).toString("base64");
+    return encrypt(this.encryptionKey, plain);
   }
 
   decrypt(stored: string) {
-    const buffer = Buffer.from(stored, "base64");
-    const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, buffer.subarray(0, 12));
-    decipher.setAuthTag(buffer.subarray(12, 28));
-    // Lève une erreur si la clé est mauvaise ou si la valeur a été altérée.
-    return Buffer.concat([decipher.update(buffer.subarray(28)), decipher.final()]).toString("utf8");
+    return decrypt(this.encryptionKey, stored);
   }
 }

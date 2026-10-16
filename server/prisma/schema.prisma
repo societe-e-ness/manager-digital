@@ -22,10 +22,10 @@ datasource db {
 
 model User {
   id          Int      @id @default(autoincrement())
-  email       String   @unique // identifiant du lien magique + rapprochement avec le profil SSO
-  sso_subject String?  @unique // identifiant stable renvoyé par auth.eness (null pour les clients)
+  email       String   @unique // identifiant du lien magique + rapprochement à la première connexion SSO
+  sso_subject String?  @unique // `sub` d'auth.eness, immuable : renseigné à la première connexion SSO
   name        String?
-  type        UserType // AGENCY → connexion SSO, CLIENT → lien magique
+  type        UserType // agence ou client ; ne décide pas de la méthode de connexion (ADR 0001)
   created_at  DateTime @default(now())
 
   clients              UserClient[]
@@ -195,8 +195,16 @@ model Session {
   user_agent String?
   created_at DateTime    @default(now())
 
+  // --- SSO uniquement (null pour un lien magique)
+  role          String? // rôle auth.eness sur le Manager Digital, relu à chaque revérification
+  sso_sid       String? // session SSO d'auth.eness : cible du back-channel logout
+  id_token      String? // requis pour la déconnexion côté auth.eness (id_token_hint)
+  refresh_token String? // CHIFFRÉ (AES-256-GCM) : sert à revérifier l'accès
+  checked_at    DateTime? // dernière revérification auprès d'auth.eness
+
   user User @relation(fields: [user_id], references: [id], onDelete: Cascade)
 
+  @@index([sso_sid])
   @@map("session")
 }
 

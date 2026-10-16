@@ -14,3 +14,10 @@ process.env.ENCRYPTION_KEY = randomBytes(32).toString("base64");
 process.env.META_ENABLED = "true";
 process.env.META_APP_ID = "test-app-id";
 process.env.META_APP_SECRET = "test-app-secret";
+process.env.CLIENT_PUBLIC_URL = "http://localhost:5173";
+// auth.eness est remplacé par FakeAuthEness (mêmes valeurs)
+process.env.SSO_ENABLED = "true";
+process.env.OIDC_ISSUER = "https://auth.test";
+process.env.OIDC_CLIENT_ID = "manager-digital";
+process.env.OIDC_CLIENT_SECRET = "test-oidc-secret";
+process.env.OIDC_RESOURCE = "https://manager-digital.test/";

@@ -20,10 +20,10 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "prisma db seed",
     "prisma:studio": "prisma studio",
-    "test": "jest",
-    "test:watch": "jest --watch",
-    "test:cov": "jest --coverage",
-    "test:e2e": "jest --config test/jest-e2e.json"
+    "test": "node --experimental-vm-modules --disable-warning=ExperimentalWarning test/run-jest.cjs",
+    "test:watch": "node --experimental-vm-modules --disable-warning=ExperimentalWarning test/run-jest.cjs --watch",
+    "test:cov": "node --experimental-vm-modules --disable-warning=ExperimentalWarning test/run-jest.cjs --coverage",
+    "test:e2e": "node --experimental-vm-modules --disable-warning=ExperimentalWarning test/run-jest.cjs --config test/jest-e2e.json"
   },
   "dependencies": {
     "@nestjs/common": "11.2.6",
@@ -34,6 +34,8 @@
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
     "dotenv": "17.4.2",
+    "jose": "6.2.12",
+    "openid-client": "6.8.8",
     "pg": "8.23.0",
     "reflect-metadata": "0.2.2",
     "rxjs": "7.8.2",
