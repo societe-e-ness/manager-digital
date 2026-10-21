@@ -200,6 +200,20 @@ describe("Connexion SSO auth.eness (HTTP)", () => {
       expect((await db.session.findFirstOrThrow()).revoked_at).not.toBeNull();
     });
 
+    it("révoque aussi les Plugin WP autorisés par la personne quand l'accès a été retiré", async () => {
+      const { agent } = await ssoLogin("sub-jeanne");
+      const jeanne = await db.user.findUniqueOrThrow({ where: { sso_subject: "sub-jeanne" } });
+      const client = await db.client.create({ data: { name: "Client" } });
+      const site = await db.site.create({ data: { domain: "site.fr", client_id: client.id } });
+      await db.pluginAuthorization.create({ data: { user_id: jeanne.id, site_id: site.id, token_hash: "empreinte" } });
+      auth.accounts.get("sub-jeanne")!.hasAccess = false;
+      await ageCheck();
+
+      await agent.get("/auth/me").expect(401);
+
+      expect((await db.pluginAuthorization.findFirstOrThrow()).revoked_at).not.toBeNull();
+    });
+
     it("ne déconnecte pas pour une panne d'auth.eness, et revérifie plus tard", async () => {
       const { agent } = await ssoLogin("sub-jeanne");
       auth.down = true;

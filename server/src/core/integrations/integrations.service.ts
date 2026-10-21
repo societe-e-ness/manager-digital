@@ -230,6 +230,11 @@ export class IntegrationsService {
     });
   }
 
+  /** Les Ressources rattachées à un Site (routes du Plugin WP). */
+  listSiteResources(siteId: number) {
+    return this.db.resource.findMany({ where: { site_id: siteId }, include: RESOURCE_ACCESS, orderBy: { id: "asc" } });
+  }
+
   /**
    * Rattache (ou détache avec null) une Ressource à un Site, si elle est toujours rattachée à
    * `expectedSiteId` (ce que l'appelant a contrôlé). Sinon, quelqu'un est passé entre-temps : 409.

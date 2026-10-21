@@ -1,11 +1,11 @@
 import { HttpStatus, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import { createHash, randomBytes } from "node:crypto";
 import type { LoginMethod, Session, User, UserType } from "../../generated/prisma/client";
+import { newToken, sha256 } from "../crypto/tokens";
 import { DatabaseService } from "../database/database.service";
 import { ProblemException } from "../problems/problem.exception";
 import { MagicLinkSender } from "./magic-link.sender";
-import { SsoService, type SsoIdentity } from "./sso.service";
+import { safeReturnTo, SsoService, type SsoIdentity } from "./sso.service";
 
 const MAGIC_LINK_TTL_MS = 15 * 60 * 1000;
 const SESSION_TTL_MS = 30 * 24 * 3600 * 1000;
@@ -39,8 +39,11 @@ export class AuthService {
 
   // --- Lien magique ---------------------------------------------------------
 
-  /** Envoie un lien si l'email est connu. Ne dit jamais s'il l'est. */
-  async requestMagicLink(email: string) {
+  /**
+   * Envoie un lien si l'email est connu. Ne dit jamais s'il l'est.
+   * `returnTo` : chemin local du front où revenir après la connexion (ex. l'autorisation du Plugin WP).
+   */
+  async requestMagicLink(email: string, returnTo?: unknown) {
     const user = await this.findUserByEmail(email);
     if (!user) return;
 
@@ -51,6 +54,7 @@ export class AuthService {
 
     const link = new URL("/connexion", this.config.getOrThrow<string>("CLIENT_PUBLIC_URL"));
     link.searchParams.set("token", token);
+    if (returnTo !== undefined) link.searchParams.set("returnTo", safeReturnTo(returnTo));
     await this.sender.send(user.email, link.toString());
   }
 
@@ -200,7 +204,12 @@ export class AuthService {
     const fresh = await this.sso.recheck(session.refresh_token);
     if (fresh.status === "unavailable") return {}; // panne : on garde la session, nouvel essai dans 10 minutes
     if (fresh.status === "lost") {
-      await this.db.session.update({ where: { id: session.id }, data: { revoked_at: new Date() } });
+      // l'accès a été retiré dans auth.eness : la session, et les Plugin WP autorisés par la personne
+      const now = new Date();
+      await this.db.$transaction([
+        this.db.session.update({ where: { id: session.id }, data: { revoked_at: now } }),
+        this.db.pluginAuthorization.updateMany({ where: { user_id: session.user_id, revoked_at: null }, data: { revoked_at: now } }),
+      ]);
       return null;
     }
     return this.db.session.update({
@@ -211,14 +220,6 @@ export class AuthService {
       },
     });
   }
-}
-
-function newToken() {
-  return randomBytes(32).toString("base64url");
-}
-
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function newSession(sessionToken: string, userId: number, method: LoginMethod, userAgent?: string) {

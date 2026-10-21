@@ -44,6 +44,9 @@ export class SsoController {
       if (!(e instanceof ProblemException)) throw e;
       const url = new URL("/connexion", this.config.getOrThrow<string>("CLIENT_PUBLIC_URL"));
       url.searchParams.set("erreur", e.type);
+      // par exemple l'autorisation du Plugin WP : on y reviendra après une nouvelle tentative
+      const returnTo = this.sso.readFlow(readSsoFlowCookie(req))?.returnTo;
+      if (returnTo && returnTo !== "/") url.searchParams.set("returnTo", returnTo);
       res.redirect(url.href);
     }
   }

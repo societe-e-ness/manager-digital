@@ -7,7 +7,8 @@ import { CurrentUser, Public } from "./session.guard";
 import { SsoService } from "./sso.service";
 
 /**
- *   POST /auth/magic-link         { email } → envoie un lien si l'email est connu (toujours 204)
+ *   POST /auth/magic-link         { email, returnTo? } → envoie un lien si l'email est connu (toujours 204) ;
+ *                                           le lien garde `returnTo` (chemin local) pour y revenir ensuite
  *   POST /auth/magic-link/verify  { token } → ouvre une session, pose le cookie
  *   GET  /auth/me                           → l'utilisateur connecté
  *   POST /auth/logout                       → révoque la session, efface le cookie ;
@@ -30,9 +31,9 @@ export class AuthController {
   @Public()
   @Post("magic-link")
   @HttpCode(204)
-  async requestMagicLink(@Body() body: { email?: unknown }) {
+  async requestMagicLink(@Body() body: { email?: unknown; returnTo?: unknown }) {
     if (typeof body?.email !== "string" || !body.email.trim()) throw new BadRequestException("email requis");
-    await this.auth.requestMagicLink(body.email);
+    await this.auth.requestMagicLink(body.email, body.returnTo);
   }
 
   @Public()
