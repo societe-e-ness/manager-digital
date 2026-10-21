@@ -62,7 +62,7 @@ model Site {
   user_packs    UserPack[]
   user_features UserFeature[]
   features      SiteFeature[]
-  resources     IntegrationResource[]
+  resources     Resource[]
 
   @@map("site")
 }
@@ -211,7 +211,7 @@ model Session {
 // Intégrations API (Meta pour commencer)
 // ─────────────────────────────────────────────
 
-// LA CLÉ : un accès autorisé par une personne sur son compte Meta
+// LA CLÉ : un accès autorisé par une personne sur son compte Meta. Ce n'est qu'un moyen d'atteindre des Ressources.
 model Integration {
   id               Int                 @id @default(autoincrement())
   provider         IntegrationProvider
@@ -235,27 +235,47 @@ model Integration {
   @@map("integration")
 }
 
-// LES PORTES : ce que la clé permet d'atteindre (page, compte Instagram, compte publicitaire…)
-model IntegrationResource {
-  id             Int          @id @default(autoincrement())
-  integration_id Int
-  parent_id      Int? // ex : compte Instagram rattaché à sa page Facebook
-  site_id        Int? // null tant que la ressource n'est associée à aucun site
+// LES PORTES : une page Facebook, un compte Instagram, un compte publicitaire.
+// Unique par réseau, type et identifiant externe : une même page n'est qu'une seule Ressource,
+// quel que soit le nombre d'Intégrations qui y mènent.
+model Resource {
+  id             Int                 @id @default(autoincrement())
+  provider       IntegrationProvider
   type           ResourceType
   external_id    String // id de la ressource côté fournisseur
+  parent_id      Int? // ex : compte Instagram rattaché à sa page Facebook
+  site_id        Int? // le rattachement est porté par la Ressource : au plus un Site, null = aucun
   name           String // nom affiché dans l'interface
-  access_token   String? // jeton propre (pages Facebook uniquement), CHIFFRÉ
   metadata       Json? // infos propres au fournisseur (photo, catégorie, devise…)
   last_synced_at DateTime?
   last_error     String?
+  created_at     DateTime            @default(now())
+
+  site Site? @relation(fields: [site_id], references: [id], onDelete: SetNull) // supprimer un site ne supprime pas la page
+
+  // supprimer une page ne supprime pas son compte Instagram, qui peut être rattaché à un Site
+  parent   Resource?  @relation("ResourceParent", fields: [parent_id], references: [id], onDelete: SetNull)
+  children Resource[] @relation("ResourceParent")
+
+  integrations IntegrationResource[]
+
+  @@unique([provider, type, external_id])
+  @@map("resource")
+}
+
+// LE LIEN : telle Intégration mène à telle Ressource. Le jeton de page y est rangé,
+// puisqu'il est obtenu au travers d'une Intégration précise.
+// Une Ressource sans lien vers une Intégration ACTIVE est inaccessible (calculé, pas stocké).
+model IntegrationResource {
+  integration_id Int
+  resource_id    Int
+  access_token   String? // jeton propre (pages Facebook uniquement), CHIFFRÉ
 
   integration Integration @relation(fields: [integration_id], references: [id], onDelete: Cascade)
-  site        Site?       @relation(fields: [site_id], references: [id], onDelete: SetNull) // supprimer un site ne supprime pas la page
+  resource    Resource    @relation(fields: [resource_id], references: [id], onDelete: Cascade)
 
-  parent   IntegrationResource?  @relation("ResourceParent", fields: [parent_id], references: [id], onDelete: Cascade)
-  children IntegrationResource[] @relation("ResourceParent")
-
-  @@unique([integration_id, type, external_id])
+  @@id([integration_id, resource_id])
+  @@index([resource_id])
   @@map("integration_resource")
 }
 

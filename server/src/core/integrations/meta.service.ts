@@ -1,15 +1,12 @@
 import { Injectable, UnauthorizedException } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { createHmac } from "node:crypto";
-import type { Integration, IntegrationResource } from "../../generated/prisma/client";
+import type { Integration } from "../../generated/prisma/client";
 import { IntegrationsService, type ResourceInput } from "./integrations.service";
 
 const GRAPH_URL = "https://graph.facebook.com/v21.0";
 const STATE_TTL_MS = 10 * 60 * 1000;
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
-
-/** Une ressource avec son intégration : ce que les modules métier manipulent. */
-type ResourceWithIntegration = IntegrationResource & { integration: Integration };
 
 /**
  * Le seul fichier du projet qui parle à Meta.
@@ -136,18 +133,19 @@ export class MetaService {
    * pages Facebook (avec leur jeton propre) et comptes Instagram rattachés aux pages.
    */
   async fetchResources(integration: Integration): Promise<ResourceInput[]> {
-    const adAccounts = await this.graph(integration, "/me/adaccounts", { fields: "id,name,currency", limit: "100" });
-    const pages = await this.graph(integration, "/me/accounts", {
+    // Liste complète : la synchronisation retire les liens vers ce qui n'est pas renvoyé.
+    const adAccounts = await this.graphList(integration, "/me/adaccounts", { fields: "id,name,currency", limit: "100" });
+    const pages = await this.graphList(integration, "/me/accounts", {
       fields: "id,name,access_token,category,instagram_business_account{id,username}",
       limit: "100",
     });
 
     const resources: ResourceInput[] = [];
 
-    for (const a of adAccounts.data ?? []) {
+    for (const a of adAccounts) {
       resources.push({ type: "AD_ACCOUNT", externalId: a.id, name: a.name ?? a.id, metadata: { currency: a.currency } });
     }
-    for (const p of pages.data ?? []) {
+    for (const p of pages) {
       resources.push({ type: "FACEBOOK_PAGE", externalId: p.id, name: p.name, accessToken: p.access_token, metadata: { category: p.category } });
       if (p.instagram_business_account) {
         const ig = p.instagram_business_account;
@@ -157,9 +155,12 @@ export class MetaService {
     return resources;
   }
 
-  /** Métriques par campagne d'un compte publicitaire sur une période, traduites dans notre vocabulaire. */
-  async fetchCampaignMetrics(resource: ResourceWithIntegration, from: Date, to: Date) {
-    const data = await this.graph(resource.integration, `/${resource.external_id}/insights`, {
+  /**
+   * Métriques par campagne d'un compte publicitaire sur une période, traduites dans notre vocabulaire.
+   * `integration` : n'importe quelle Intégration ACTIVE qui mène au compte (voir findActiveResources).
+   */
+  async fetchCampaignMetrics(integration: Integration, adAccountExternalId: string, from: Date, to: Date) {
+    const data = await this.graph(integration, `/${adAccountExternalId}/insights`, {
       level: "campaign",
       fields: "campaign_id,campaign_name,impressions,clicks,ctr,spend,account_currency,actions,purchase_roas",
       time_range: JSON.stringify({ since: isoDate(from), until: isoDate(to) }),
@@ -194,6 +195,18 @@ export class MetaService {
       if (e instanceof MetaAuthError) await this.integrations.markAsExpired(integration.id);
       throw e;
     }
+  }
+
+  /** Tous les éléments d'une liste Graph, en suivant la pagination de Meta (curseur `after`). */
+  private async graphList(integration: Integration, path: string, query: Record<string, string> = {}) {
+    const items: any[] = [];
+    let after: string | undefined;
+    do {
+      const page = await this.graph(integration, path, after ? { ...query, after } : query);
+      items.push(...(page.data ?? []));
+      after = page.paging?.next ? page.paging.cursors?.after : undefined;
+    } while (after);
+    return items;
   }
 
   /** Le `fetch` nu vers la Graph API, sans logique de jeton. */

@@ -51,8 +51,14 @@ describe("Droits social.* (HTTP)", () => {
         created_by_id: owner.id,
       },
     });
-    return db.integrationResource.create({
-      data: { integration_id: integration.id, type: "FACEBOOK_PAGE", external_id: "page-1", name: "Boulangerie Martin" },
+    return db.resource.create({
+      data: {
+        provider: "META",
+        type: "FACEBOOK_PAGE",
+        external_id: "page-1",
+        name: "Boulangerie Martin",
+        integrations: { create: { integration_id: integration.id } },
+      },
     });
   }
 
@@ -83,7 +89,7 @@ describe("Droits social.* (HTTP)", () => {
       detail: "Fonctionnalité social.manage requise",
       feature: "social.manage",
     });
-    expect((await db.integrationResource.findUniqueOrThrow({ where: { id: resourceId } })).site_id).toBeNull();
+    expect((await db.resource.findUniqueOrThrow({ where: { id: resourceId } })).site_id).toBeNull();
   }
 
   describe("sources du droit", () => {
@@ -202,7 +208,7 @@ describe("Droits social.* (HTTP)", () => {
 
   describe("détachement", () => {
     it("détacher exige social.manage sur le Site auquel la Ressource est rattachée", async () => {
-      await db.integrationResource.update({ where: { id: resourceId }, data: { site_id: siteA } });
+      await db.resource.update({ where: { id: resourceId }, data: { site_id: siteA } });
       const marie = await clientUser("marie@client-a.fr", [clientA]);
       const bob = await clientUser("bob@client-b.fr", [clientB]);
       await givenOverride(db, bob, "social.manage", "ADD");
@@ -213,13 +219,24 @@ describe("Droits social.* (HTTP)", () => {
       expect(res.body.site_id).toBeNull();
     });
 
+    it("détacher une Ressource non rattachée exige de pouvoir gérer une Intégration qui y mène", async () => {
+      const marie = await clientUser("marie@client-a.fr", [clientA]);
+      await givenOverride(db, marie, "social.manage", "ADD");
+      const res = await attach(await loginAs(app, "marie@client-a.fr"), null).expect(403);
+      expect(res.body.type).toBe("agency-only"); // la Ressource n'est atteinte que par un accès de l'agence
+
+      const agent = await db.user.create({ data: { email: "agent@agence.fr", type: "AGENCY" } });
+      await givenOverride(db, agent.id, "social.manage", "ADD");
+      await attach(await loginAs(app, "agent@agence.fr"), null).expect(200);
+    });
+
     it("rattacher ailleurs exige aussi social.manage sur le Site actuel : pas de Ressource prise à un autre Client", async () => {
-      await db.integrationResource.update({ where: { id: resourceId }, data: { site_id: siteB } });
+      await db.resource.update({ where: { id: resourceId }, data: { site_id: siteB } });
       const marie = await clientUser("marie@client-a.fr", [clientA]);
       await givenOverride(db, marie, "social.manage", "ADD");
 
       await attach(await loginAs(app, "marie@client-a.fr"), siteA).expect(403);
-      expect((await db.integrationResource.findUniqueOrThrow({ where: { id: resourceId } })).site_id).toBe(siteB);
+      expect((await db.resource.findUniqueOrThrow({ where: { id: resourceId } })).site_id).toBe(siteB);
     });
   });
 
@@ -228,7 +245,7 @@ describe("Droits social.* (HTTP)", () => {
     let lecteur: TestAgent;
 
     beforeEach(async () => {
-      integrationId = (await db.integrationResource.findUniqueOrThrow({ where: { id: resourceId } })).integration_id;
+      integrationId = (await db.integrationResource.findFirstOrThrow({ where: { resource_id: resourceId } })).integration_id;
       const marie = await clientUser("marie@client-a.fr", [clientA]);
       await givenOverride(db, marie, "social.read", "ADD");
       await givenOverride(db, marie, "social.publish", "ADD");

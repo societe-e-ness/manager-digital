@@ -17,7 +17,7 @@ import type { Response } from "express";
 import type { AuthenticatedUser } from "../auth/auth.service";
 import { CurrentUser } from "../auth/session.guard";
 import { ProblemException } from "../problems/problem.exception";
-import { Features, RightsService } from "../rights/rights.service";
+import { Features, missingFeature, RightsService } from "../rights/rights.service";
 import { IntegrationsService } from "./integrations.service";
 import { MetaService } from "./meta.service";
 
@@ -30,7 +30,8 @@ import { MetaService } from "./meta.service";
  *   GET    /integrations/:id                                 → une intégration et ses ressources
  *   POST   /integrations/:id/resources/sync                  → re-demande l'inventaire à Meta
  *   PATCH  /integrations/resources/:id                       → rattache une ressource à un site ({ siteId } ou { siteId: null })
- *   DELETE /integrations/:id                                 → déconnecte (supprime aussi les ressources)
+ *   DELETE /integrations/:id                                 → déconnecte : supprime ses liens, et les ressources
+ *                                                              auxquelles plus rien ne mène ni ne fait référence
  *
  * Toutes exigent une session (garde globale), callback compris : Meta y renvoie le navigateur,
  * et `social.manage` : sur le Site visé et sur le Site actuel de la Ressource pour un rattachement
@@ -59,6 +60,19 @@ export class IntegrationsController {
         "Les accès de l'agence ne se gèrent que par un Utilisateur agence : préciser le Client (clientId)",
       );
     }
+  }
+
+  /** requireManage pour au moins un de ces Clients ; sinon, l'erreur du dernier essai. */
+  private async requireManageAny(user: AuthenticatedUser, clientIds: (number | null)[]) {
+    let denied: unknown = missingFeature(Features.SOCIAL_MANAGE);
+    for (const clientId of new Set(clientIds)) {
+      try {
+        return await this.requireManage(user, clientId);
+      } catch (e) {
+        denied = e;
+      }
+    }
+    throw denied;
   }
 
   // --- OAuth ----------------------------------------------------------------
@@ -164,9 +178,9 @@ export class IntegrationsController {
     const current = await this.integrations.findResourceById(id);
     const sites = [...new Set([target, current.site_id])].filter((siteId) => siteId !== null);
     for (const siteId of sites) await this.rights.requireFeature(user, Features.SOCIAL_MANAGE, { siteId });
-    if (sites.length === 0) await this.requireManage(user, current.integration.client_id); // ni rattachée ni à rattacher
-    const { access_token, ...resource } = await this.integrations.attachResourceToSite(id, target);
-    return resource;
+    // Ni rattachée ni à rattacher : il faut pouvoir gérer une des Intégrations qui y mènent.
+    if (sites.length === 0) await this.requireManageAny(user, current.integrations.map((l) => l.integration.client_id));
+    return this.integrations.toPublicResource(await this.integrations.attachResourceToSite(id, target));
   }
 
   @Delete(":id")

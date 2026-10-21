@@ -7,6 +7,7 @@ interface Route {
   path: string;
   status: number;
   body: unknown;
+  query: Record<string, string>;
 }
 
 export interface GraphCall {
@@ -29,7 +30,12 @@ export class FakeGraph {
     this.routes = [];
     interceptHost(GRAPH_HOST, ({ method, url, body }) => {
       const path = url.pathname.replace(/^\/v\d+\.\d+/, "");
-      const route = this.routes.find((r) => r.method === method && r.path === path);
+      const route = this.routes.find(
+        (r) =>
+          r.method === method &&
+          r.path === path &&
+          Object.entries(r.query).every(([name, value]) => url.searchParams.get(name) === value),
+      );
       if (!route) return undefined;
       this.calls.push({ method, path, query: url.searchParams, body });
       return jsonResponse(route.body, route.status);
@@ -40,9 +46,18 @@ export class FakeGraph {
     releaseHost(GRAPH_HOST);
   }
 
-  /** Déclare une réponse. `path` sans la version de l'API : "/me/accounts". */
-  on(method: string, path: string, body: unknown, status = 200) {
-    this.routes.push({ method: method.toUpperCase(), path, status, body });
+  /** Oublie les réponses déclarées (les appels déjà faits restent dans `calls`). */
+  reset() {
+    this.routes = [];
+    return this;
+  }
+
+  /**
+   * Déclare une réponse. `path` sans la version de l'API : "/me/accounts".
+   * `query` restreint la réponse aux appels portant ces paramètres ; la première route qui correspond gagne.
+   */
+  on(method: string, path: string, body: unknown, status = 200, query: Record<string, string> = {}) {
+    this.routes.push({ method: method.toUpperCase(), path, status, body, query });
     return this;
   }
 

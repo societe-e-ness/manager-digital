@@ -64,9 +64,13 @@ export class RightsService {
 
   /** 403 Problem Details (`missing-feature`) si l'utilisateur n'a la Fonctionnalité sur aucun Site de la portée. */
   async requireFeature(user: AuthenticatedUser, slug: string, scope: RightsScope = {}) {
-    if (await this.hasFeature(user, slug, scope)) return;
-    throw new ProblemException(HttpStatus.FORBIDDEN, "missing-feature", "Droit manquant", `Fonctionnalité ${slug} requise`, {
-      feature: slug,
-    });
+    if (!(await this.hasFeature(user, slug, scope))) throw missingFeature(slug);
   }
+}
+
+/** L'erreur « droit manquant » : 403 Problem Details au type stable `missing-feature`. */
+export function missingFeature(slug: string) {
+  return new ProblemException(HttpStatus.FORBIDDEN, "missing-feature", "Droit manquant", `Fonctionnalité ${slug} requise`, {
+    feature: slug,
+  });
 }

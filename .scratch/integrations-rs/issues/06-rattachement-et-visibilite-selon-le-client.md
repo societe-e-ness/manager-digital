@@ -8,6 +8,10 @@ Points relevés à la revue du ticket 04 :
 - Le callback OAuth réutilise une Intégration existante sur `external_user_id` sans tenir compte de son Client : reconnecter pour le Client A un compte Meta déjà connecté pour le Client B met à jour l'Intégration de B et la renvoie.
 - `GET /integrations?clientId=…` renvoie les Intégrations du Client, pas encore les Ressources rattachées à ses Sites par d'autres.
 
+Points relevés à la revue du ticket 05 (une Ressource est maintenant partagée entre Intégrations) :
+- Rattacher une Ressource non rattachée ne contrôle que le Site visé : un Client peut prendre une page atteinte seulement par l'Intégration d'un autre Client.
+- La liste des Intégrations d'un Client montre, pour chaque Ressource, `site_id` et `accessible` calculés sur les Intégrations de tous les Clients.
+
 **Status:** ready-for-agent
 
 - [ ] Rattacher une Ressource à un Site exige `social.manage` sur ce Site

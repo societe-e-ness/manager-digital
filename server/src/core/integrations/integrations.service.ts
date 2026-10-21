@@ -1,6 +1,6 @@
 import { HttpStatus, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import type { Prisma, ResourceType } from "../../generated/prisma/client";
+import type { Integration, IntegrationStatus, Prisma, Resource, ResourceType } from "../../generated/prisma/client";
 import { decrypt, encrypt, encryptionKey } from "../crypto/encryption";
 import { DatabaseService } from "../database/database.service";
 import { ProblemException } from "../problems/problem.exception";
@@ -15,10 +15,23 @@ export interface ResourceInput {
   metadata?: Record<string, unknown>;
 }
 
+/** Pour savoir si une Ressource est accessible, et qui la gère : chaque Intégration qui y mène. */
+const RESOURCE_ACCESS = {
+  integrations: { select: { integration: { select: { status: true, client_id: true } } } },
+} satisfies Prisma.ResourceInclude;
+
+/** Une Intégration et les Ressources auxquelles elle mène. */
+const WITH_RESOURCES = {
+  resources: { include: { resource: { include: RESOURCE_ACCESS } }, orderBy: { resource_id: "asc" } },
+} satisfies Prisma.IntegrationInclude;
+
+type ResourceWithAccess = Resource & { integrations: { integration: { status: IntegrationStatus } }[] };
+
 /**
  * Tout ce qui touche aux tables `integration` (la clé : une personne Meta qui a donné
- * son accord) et `integration_resource` (les portes : ses pages, comptes Instagram,
- * comptes publicitaires), plus le chiffrement des jetons.
+ * son accord), `resource` (les portes : pages, comptes Instagram, comptes publicitaires,
+ * uniques quel que soit le nombre d'Intégrations qui y mènent) et `integration_resource`
+ * (le lien entre les deux, avec le jeton de page), plus le chiffrement des jetons.
  *
  * Ce service ne parle jamais à Meta. C'est le rôle de MetaService.
  */
@@ -37,7 +50,7 @@ export class IntegrationsService {
   // --- Intégrations -------------------------------------------------------
 
   async findById(id: number) {
-    const integration = await this.db.integration.findUnique({ where: { id }, include: { resources: true } });
+    const integration = await this.db.integration.findUnique({ where: { id }, include: WITH_RESOURCES });
     if (!integration) throw new ProblemException(HttpStatus.NOT_FOUND, "integration-not-found", "Intégration introuvable", `Intégration ${id} introuvable`);
     return integration;
   }
@@ -46,7 +59,7 @@ export class IntegrationsService {
   list(clientId?: number) {
     return this.db.integration.findMany({
       where: clientId === undefined ? {} : { client_id: clientId },
-      include: { resources: true },
+      include: WITH_RESOURCES,
       orderBy: { created_at: "asc" },
     });
   }
@@ -89,69 +102,102 @@ export class IntegrationsService {
     return this.db.integration.update({ where: { id }, data: { status: "EXPIRED" } });
   }
 
+  /** Supprime l'Intégration et ses liens, puis les Ressources auxquelles plus rien ne mène. */
   async disconnect(id: number) {
-    await this.findById(id);
-    await this.db.integration.delete({ where: { id } }); // les ressources suivent (cascade)
+    const integration = await this.findById(id);
+    await this.db.$transaction(async (tx) => {
+      await tx.integration.delete({ where: { id } }); // les liens suivent (cascade)
+      await this.deleteOrphans(tx, integration.resources.map((l) => l.resource_id));
+    });
   }
 
   // --- Ressources ---------------------------------------------------------
 
   /**
-   * Enregistre ce que Meta a renvoyé. Une ressource déjà connue est mise à jour,
-   * une nouvelle est créée. Les pages sont traitées avant les comptes Instagram
-   * pour pouvoir renseigner parent_id.
+   * Enregistre ce que Meta a renvoyé au travers d'une Intégration. Une Ressource déjà connue,
+   * même par une autre Intégration, est mise à jour ; une nouvelle est créée. Les pages sont
+   * traitées avant les comptes Instagram pour pouvoir renseigner parent_id. Les liens vers
+   * ce que l'Intégration n'atteint plus sont retirés.
    */
   async syncResources(integrationId: number, resources: ResourceInput[]) {
+    const { provider } = await this.db.integration.findUniqueOrThrow({ where: { id: integrationId }, select: { provider: true } });
     const idsByExternalId = new Map<string, number>();
     const ordered = [...resources].sort((a, b) => (a.parentExternalId ? 1 : 0) - (b.parentExternalId ? 1 : 0));
 
     for (const r of ordered) {
       const data = {
         name: r.name,
-        access_token: r.accessToken ? this.encrypt(r.accessToken) : null,
         parent_id: r.parentExternalId ? (idsByExternalId.get(r.parentExternalId) ?? null) : null,
         metadata: (r.metadata ?? {}) as Prisma.InputJsonValue,
         last_synced_at: new Date(),
         last_error: null,
       };
-      const saved = await this.db.integrationResource.upsert({
-        where: { integration_id_type_external_id: { integration_id: integrationId, type: r.type, external_id: r.externalId } },
+      const resource = await this.db.resource.upsert({
+        where: { provider_type_external_id: { provider, type: r.type, external_id: r.externalId } },
         update: data,
-        create: { ...data, integration_id: integrationId, type: r.type, external_id: r.externalId },
+        create: { ...data, provider, type: r.type, external_id: r.externalId },
       });
-      idsByExternalId.set(r.externalId, saved.id);
+
+      const link = { access_token: r.accessToken ? this.encrypt(r.accessToken) : null };
+      await this.db.integrationResource.upsert({
+        where: { integration_id_resource_id: { integration_id: integrationId, resource_id: resource.id } },
+        update: link,
+        create: { ...link, integration_id: integrationId, resource_id: resource.id },
+      });
+      idsByExternalId.set(r.externalId, resource.id);
     }
+
+    const stale = await this.db.integrationResource.findMany({
+      where: { integration_id: integrationId, resource_id: { notIn: [...idsByExternalId.values()] } },
+      select: { resource_id: true },
+    });
+    if (stale.length === 0) return;
+    const staleIds = stale.map((l) => l.resource_id);
+    await this.db.$transaction(async (tx) => {
+      await tx.integrationResource.deleteMany({ where: { integration_id: integrationId, resource_id: { in: staleIds } } });
+      await this.deleteOrphans(tx, staleIds);
+    });
+  }
+
+  /**
+   * Parmi ces Ressources, supprime celles auxquelles plus aucune Intégration ne mène et que rien
+   * ne référence (pas de Site). Les autres restent, inaccessibles tant qu'on ne les reconnecte pas.
+   */
+  private deleteOrphans(tx: Prisma.TransactionClient, resourceIds: number[]) {
+    return tx.resource.deleteMany({ where: { id: { in: resourceIds }, site_id: null, integrations: { none: {} } } });
   }
 
   async findResourceById(id: number) {
-    const resource = await this.db.integrationResource.findUnique({ where: { id }, include: { integration: true } });
+    const resource = await this.db.resource.findUnique({ where: { id }, include: RESOURCE_ACCESS });
     if (!resource) throw new ProblemException(HttpStatus.NOT_FOUND, "resource-not-found", "Ressource introuvable", `Ressource ${id} introuvable`);
     return resource;
   }
 
-  /** Rattache (ou détache avec null) une page / un compte à un site. */
-  async attachResourceToSite(id: number, siteId: number | null) {
-    await this.findResourceById(id);
-    return this.db.integrationResource.update({ where: { id }, data: { site_id: siteId } });
+  /** Rattache (ou détache avec null) une page / un compte à un site. La Ressource doit exister (findResourceById). */
+  attachResourceToSite(id: number, siteId: number | null) {
+    return this.db.resource.update({ where: { id }, data: { site_id: siteId }, include: RESOURCE_ACCESS });
   }
 
-  /** Les ressources d'un site prêtes à être synchronisées : intégration ACTIVE. */
+  /** Les ressources d'un site prêtes à être synchronisées, avec leurs liens vers des Intégrations ACTIVE. */
   findActiveResources(siteId: number) {
-    return this.db.integrationResource.findMany({
-      where: { site_id: siteId, integration: { status: "ACTIVE" } },
-      include: { integration: true },
+    const active = { integration: { status: "ACTIVE" } } satisfies Prisma.IntegrationResourceWhereInput;
+    return this.db.resource.findMany({
+      where: { site_id: siteId, integrations: { some: active } },
+      include: { integrations: { where: active, include: { integration: true } } },
     });
   }
 
   // --- Présentation -------------------------------------------------------
 
-  /** Ce qu'on renvoie à l'API : jamais de jeton, ni sur l'intégration ni sur ses ressources. */
-  toPublic(integration: { access_token: string; resources?: { access_token: string | null }[] } & Record<string, unknown>) {
+  /** Ce qu'on renvoie à l'API : jamais de jeton, ni sur l'intégration ni sur ses liens. */
+  toPublic(integration: Integration & { resources: { resource: ResourceWithAccess }[] }) {
     const { access_token, resources, ...rest } = integration;
-    return {
-      ...rest,
-      resources: resources?.map(({ access_token, ...r }) => r),
-    };
+    return { ...rest, resources: resources.map((l) => this.toPublicResource(l.resource)) };
+  }
+
+  /** Une Ressource est accessible si au moins une Intégration ACTIVE y mène. */
+  toPublicResource({ integrations, ...resource }: ResourceWithAccess) {
+    return { ...resource, accessible: integrations.some((l) => l.integration.status === "ACTIVE") };
   }
 
   // --- Chiffrement AES-256-GCM (voir core/crypto) --------------------------
