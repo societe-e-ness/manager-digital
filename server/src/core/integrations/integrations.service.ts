@@ -1,9 +1,10 @@
 import { HttpStatus, Injectable } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import type { Integration, IntegrationStatus, Prisma, Resource, ResourceType } from "../../generated/prisma/client";
+import { Prisma, type Integration, type IntegrationStatus, type Resource, type ResourceType } from "../../generated/prisma/client";
 import { decrypt, encrypt, encryptionKey } from "../crypto/encryption";
 import { DatabaseService } from "../database/database.service";
 import { ProblemException } from "../problems/problem.exception";
+import type { VisibleClients } from "../rights/rights.service";
 
 /** Une ressource telle que MetaService la renvoie, avant écriture en base. */
 export interface ResourceInput {
@@ -15,9 +16,13 @@ export interface ResourceInput {
   metadata?: Record<string, unknown>;
 }
 
-/** Pour savoir si une Ressource est accessible, et qui la gère : chaque Intégration qui y mène. */
+/**
+ * Pour savoir si une Ressource est accessible, qui la gère (chaque Intégration qui y mène)
+ * et à quel Client appartient son Site.
+ */
 const RESOURCE_ACCESS = {
   integrations: { select: { integration: { select: { status: true, client_id: true } } } },
+  site: { select: { client_id: true } },
 } satisfies Prisma.ResourceInclude;
 
 /** Une Intégration et les Ressources auxquelles elle mène. */
@@ -25,7 +30,20 @@ const WITH_RESOURCES = {
   resources: { include: { resource: { include: RESOURCE_ACCESS } }, orderBy: { resource_id: "asc" } },
 } satisfies Prisma.IntegrationInclude;
 
-type ResourceWithAccess = Resource & { integrations: { integration: { status: IntegrationStatus } }[] };
+type ResourceWithAccess = Resource & {
+  integrations: { integration: { status: IntegrationStatus } }[];
+  site: { client_id: number } | null;
+};
+
+/** 409 : la Ressource est (ou vient d'être) rattachée à un autre Site. */
+export function resourceAlreadyAttached() {
+  return new ProblemException(
+    HttpStatus.CONFLICT,
+    "resource-already-attached",
+    "Ressource déjà rattachée",
+    "Cette Ressource est rattachée à un autre Site : la détacher d'abord",
+  );
+}
 
 /**
  * Tout ce qui touche aux tables `integration` (la clé : une personne Meta qui a donné
@@ -65,30 +83,49 @@ export class IntegrationsService {
   }
 
   /**
-   * Après le callback OAuth. Une reconnexion de la même personne Meta met à jour
-   * la ligne existante (unique sur provider + external_user_id).
+   * Après le callback OAuth. Une reconnexion de la même personne Meta pour le même Client
+   * met à jour la ligne existante ; pour un autre Client, elle en crée une autre.
+   * Pas d'upsert Prisma : l'unicité de l'accès de l'agence (client_id null) est un index partiel.
    */
-  upsertFromOAuth(input: {
-    externalUserId: string;
-    accessToken: string;
-    expiresAt: Date;
-    scopes: string[];
-    clientId: number | null;
-    createdById: number;
-  }) {
+  async upsertFromOAuth(
+    input: {
+      externalUserId: string;
+      accessToken: string;
+      expiresAt: Date;
+      scopes: string[];
+      clientId: number | null;
+      createdById: number;
+    },
+    retried = false,
+  ): Promise<Integration> {
     const tokens = { access_token: this.encrypt(input.accessToken), expires_at: input.expiresAt };
-    return this.db.integration.upsert({
-      where: { provider_external_user_id: { provider: "META", external_user_id: input.externalUserId } },
-      update: { ...tokens, scopes: input.scopes, status: "ACTIVE" },
-      create: {
-        ...tokens,
-        provider: "META",
-        external_user_id: input.externalUserId,
-        scopes: input.scopes,
-        client_id: input.clientId,
-        created_by_id: input.createdById,
-      },
+    const existing = await this.db.integration.findFirst({
+      where: { provider: "META", external_user_id: input.externalUserId, client_id: input.clientId },
     });
+    if (existing) {
+      // la personne qui reconnecte devient celle qui peut déconnecter
+      return this.db.integration.update({
+        where: { id: existing.id },
+        data: { ...tokens, scopes: input.scopes, status: "ACTIVE", created_by_id: input.createdById },
+      });
+    }
+    try {
+      return await this.db.integration.create({
+        data: {
+          ...tokens,
+          provider: "META",
+          external_user_id: input.externalUserId,
+          scopes: input.scopes,
+          client_id: input.clientId,
+          created_by_id: input.createdById,
+        },
+      });
+    } catch (e) {
+      // Deux retours simultanés de Meta (double-clic) : l'autre vient de la créer, on la met à jour.
+      const duplicate = e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002";
+      if (duplicate && !retried) return this.upsertFromOAuth(input, true);
+      throw e;
+    }
   }
 
   saveToken(id: number, accessToken: string, expiresAt: Date) {
@@ -173,9 +210,39 @@ export class IntegrationsService {
     return resource;
   }
 
-  /** Rattache (ou détache avec null) une page / un compte à un site. La Ressource doit exister (findResourceById). */
-  attachResourceToSite(id: number, siteId: number | null) {
-    return this.db.resource.update({ where: { id }, data: { site_id: siteId }, include: RESOURCE_ACCESS });
+  /**
+   * Les Ressources d'un Client : celles rattachées à ses Sites, quelle que soit la personne qui les a
+   * connectées, et celles qu'aucun Site n'a encore, atteintes par ses Intégrations. Sans Client : toutes.
+   */
+  listResources(clientId?: number) {
+    return this.db.resource.findMany({
+      where:
+        clientId === undefined
+          ? {}
+          : {
+              OR: [
+                { site: { client_id: clientId } },
+                { site_id: null, integrations: { some: { integration: { client_id: clientId } } } },
+              ],
+            },
+      include: RESOURCE_ACCESS,
+      orderBy: { id: "asc" },
+    });
+  }
+
+  /**
+   * Rattache (ou détache avec null) une Ressource à un Site, si elle est toujours rattachée à
+   * `expectedSiteId` (ce que l'appelant a contrôlé). Sinon, quelqu'un est passé entre-temps : 409.
+   */
+  async attachResourceToSite(id: number, siteId: number | null, expectedSiteId: number | null) {
+    const { count } = await this.db.resource.updateMany({ where: { id, site_id: expectedSiteId }, data: { site_id: siteId } });
+    if (count === 0) throw resourceAlreadyAttached();
+    return this.findResourceById(id);
+  }
+
+  /** Le Client d'un Site existant. */
+  async siteClientId(siteId: number) {
+    return (await this.db.site.findUniqueOrThrow({ where: { id: siteId }, select: { client_id: true } })).client_id;
   }
 
   /** Les ressources d'un site prêtes à être synchronisées, avec leurs liens vers des Intégrations ACTIVE. */
@@ -190,14 +257,23 @@ export class IntegrationsService {
   // --- Présentation -------------------------------------------------------
 
   /** Ce qu'on renvoie à l'API : jamais de jeton, ni sur l'intégration ni sur ses liens. */
-  toPublic(integration: Integration & { resources: { resource: ResourceWithAccess }[] }) {
+  toPublic(integration: Integration & { resources: { resource: ResourceWithAccess }[] }, visible: VisibleClients) {
     const { access_token, resources, ...rest } = integration;
-    return { ...rest, resources: resources.map((l) => this.toPublicResource(l.resource)) };
+    return { ...rest, resources: resources.map((l) => this.toPublicResource(l.resource, visible)) };
   }
 
-  /** Une Ressource est accessible si au moins une Intégration ACTIVE y mène. */
-  toPublicResource({ integrations, ...resource }: ResourceWithAccess) {
-    return { ...resource, accessible: integrations.some((l) => l.integration.status === "ACTIVE") };
+  /**
+   * Une Ressource est accessible si au moins une Intégration ACTIVE y mène. Rattachée au Site
+   * d'un Client que l'utilisateur ne voit pas, elle apparaît sans Site et `attached_elsewhere`.
+   */
+  toPublicResource({ integrations, site, ...resource }: ResourceWithAccess, visible: VisibleClients) {
+    const elsewhere = site !== null && visible !== "all" && !visible.includes(site.client_id);
+    return {
+      ...resource,
+      site_id: elsewhere ? null : resource.site_id,
+      attached_elsewhere: elsewhere,
+      accessible: integrations.some((l) => l.integration.status === "ACTIVE"),
+    };
   }
 
   // --- Chiffrement AES-256-GCM (voir core/crypto) --------------------------

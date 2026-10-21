@@ -39,25 +39,33 @@ describe("Droits social.* (HTTP)", () => {
     await app.close();
   });
 
-  /** Une Ressource connectée par l'agence, encore rattachée à aucun Site. */
+  /**
+   * Une Ressource encore rattachée à aucun Site, atteinte par un accès de l'agence et par une
+   * Intégration de chaque Client : seuls les droits sur le Site visé décident du rattachement.
+   */
   async function givenResource() {
     const owner = await db.user.create({ data: { email: "proprietaire@agence.fr", type: "AGENCY" } });
-    const integration = await db.integration.create({
-      data: {
-        provider: "META",
-        external_user_id: "meta-user-1",
-        access_token: app.get(IntegrationsService).encrypt("user-token"),
-        scopes: [],
-        created_by_id: owner.id,
-      },
-    });
+    const integrationIds = [];
+    for (const client_id of [null, clientA, clientB]) {
+      const integration = await db.integration.create({
+        data: {
+          provider: "META",
+          external_user_id: "meta-user-1",
+          access_token: app.get(IntegrationsService).encrypt("user-token"),
+          scopes: [],
+          client_id,
+          created_by_id: owner.id,
+        },
+      });
+      integrationIds.push(integration.id);
+    }
     return db.resource.create({
       data: {
         provider: "META",
         type: "FACEBOOK_PAGE",
         external_id: "page-1",
         name: "Boulangerie Martin",
-        integrations: { create: { integration_id: integration.id } },
+        integrations: { create: integrationIds.map((integration_id) => ({ integration_id })) },
       },
     });
   }
@@ -220,6 +228,7 @@ describe("Droits social.* (HTTP)", () => {
     });
 
     it("détacher une Ressource non rattachée exige de pouvoir gérer une Intégration qui y mène", async () => {
+      await db.integrationResource.deleteMany({ where: { integration: { client_id: { not: null } } } });
       const marie = await clientUser("marie@client-a.fr", [clientA]);
       await givenOverride(db, marie, "social.manage", "ADD");
       const res = await attach(await loginAs(app, "marie@client-a.fr"), null).expect(403);
@@ -230,12 +239,12 @@ describe("Droits social.* (HTTP)", () => {
       await attach(await loginAs(app, "agent@agence.fr"), null).expect(200);
     });
 
-    it("rattacher ailleurs exige aussi social.manage sur le Site actuel : pas de Ressource prise à un autre Client", async () => {
+    it("rattacher ailleurs une Ressource déjà rattachée est refusé : pas de Ressource prise à un autre Site", async () => {
       await db.resource.update({ where: { id: resourceId }, data: { site_id: siteB } });
       const marie = await clientUser("marie@client-a.fr", [clientA]);
       await givenOverride(db, marie, "social.manage", "ADD");
 
-      await attach(await loginAs(app, "marie@client-a.fr"), siteA).expect(403);
+      await attach(await loginAs(app, "marie@client-a.fr"), siteA).expect(409);
       expect((await db.resource.findUniqueOrThrow({ where: { id: resourceId } })).site_id).toBe(siteB);
     });
   });
@@ -245,7 +254,7 @@ describe("Droits social.* (HTTP)", () => {
     let lecteur: TestAgent;
 
     beforeEach(async () => {
-      integrationId = (await db.integrationResource.findFirstOrThrow({ where: { resource_id: resourceId } })).integration_id;
+      integrationId = (await db.integration.findFirstOrThrow({ where: { client_id: null } })).id; // l'accès de l'agence
       const marie = await clientUser("marie@client-a.fr", [clientA]);
       await givenOverride(db, marie, "social.read", "ADD");
       await givenOverride(db, marie, "social.publish", "ADD");
@@ -289,7 +298,7 @@ describe("Droits social.* (HTTP)", () => {
         const res = await send().expect(403);
         expect(res.body.type).toBe("agency-only");
       }
-      expect(await db.integration.count()).toBe(1);
+      expect(await db.integration.count({ where: { id: integrationId } })).toBe(1);
 
       const agent = await db.user.create({ data: { email: "agent@agence.fr", type: "AGENCY" } });
       await givenOverride(db, agent.id, "social.manage", "ADD");

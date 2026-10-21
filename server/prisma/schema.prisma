@@ -229,8 +229,11 @@ model Integration {
 
   resources IntegrationResource[]
 
-  // une reconnexion met à jour la ligne existante
-  @@unique([provider, external_user_id])
+  // une Intégration par compte et par Client : une reconnexion pour le même Client met à jour la ligne,
+  // le même compte connecté pour un autre Client en crée une autre.
+  // NULL ≠ NULL en SQL : un index unique partiel WHERE client_id IS NULL (accès de l'agence) est ajouté
+  // à la main dans la migration (voir prisma/migrations/*_integration_per_client/migration.sql).
+  @@unique([provider, external_user_id, client_id])
   @@index([status, expires_at])
   @@map("integration")
 }

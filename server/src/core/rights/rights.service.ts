@@ -10,6 +10,9 @@ export const Features = {
   SOCIAL_MANAGE: "social.manage", // connecter un compte Meta, rattacher ou détacher une Ressource
 } as const;
 
+/** Les Clients dont un utilisateur voit les Sites : tous pour un Utilisateur agence. */
+export type VisibleClients = number[] | "all";
+
 /** Où chercher le droit. Rien = sur au moins un des Sites accessibles à l'utilisateur. */
 export interface RightsScope {
   siteId?: number;
@@ -56,6 +59,12 @@ export class RightsService {
         if (overrides.some((o) => o.effect === "REMOVE" && appliesHere(o))) return false;
         return overrides.some((o) => o.effect === "ADD" && appliesHere(o)) || packs.some(appliesHere);
       });
+  }
+
+  async visibleClients(user: AuthenticatedUser): Promise<VisibleClients> {
+    if (user.type === "AGENCY") return "all";
+    const memberships = await this.db.userClient.findMany({ where: { user_id: user.id }, select: { client_id: true } });
+    return memberships.map((m) => m.client_id);
   }
 
   async hasFeature(user: AuthenticatedUser, slug: string, scope: RightsScope = {}) {

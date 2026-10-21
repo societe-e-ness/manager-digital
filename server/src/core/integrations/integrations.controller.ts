@@ -18,7 +18,7 @@ import type { AuthenticatedUser } from "../auth/auth.service";
 import { CurrentUser } from "../auth/session.guard";
 import { ProblemException } from "../problems/problem.exception";
 import { Features, missingFeature, RightsService } from "../rights/rights.service";
-import { IntegrationsService } from "./integrations.service";
+import { IntegrationsService, resourceAlreadyAttached } from "./integrations.service";
 import { MetaService } from "./meta.service";
 
 /**
@@ -27,6 +27,7 @@ import { MetaService } from "./meta.service";
  *   GET    /integrations/oauth/connect?clientId=…           → envoie la personne chez Meta
  *   GET    /integrations/oauth/callback                      → Meta la renvoie avec un code
  *   GET    /integrations?clientId=…                          → liste les intégrations (et leurs ressources)
+ *   GET    /integrations/resources?clientId=…                → les ressources visibles du client
  *   GET    /integrations/:id                                 → une intégration et ses ressources
  *   POST   /integrations/:id/resources/sync                  → re-demande l'inventaire à Meta
  *   PATCH  /integrations/resources/:id                       → rattache une ressource à un site ({ siteId } ou { siteId: null })
@@ -34,9 +35,14 @@ import { MetaService } from "./meta.service";
  *                                                              auxquelles plus rien ne mène ni ne fait référence
  *
  * Toutes exigent une session (garde globale), callback compris : Meta y renvoie le navigateur,
- * et `social.manage` : sur le Site visé et sur le Site actuel de la Ressource pour un rattachement
- * ou un détachement, sinon sur au moins un Site du Client concerné. Un accès de l'agence
- * (sans Client), comme la liste de tous les Clients, est réservé aux Utilisateurs agence.
+ * et `social.manage` sur au moins un Site du Client concerné. Un accès de l'agence (sans Client),
+ * comme la liste de tous les Clients, est réservé aux Utilisateurs agence. En plus :
+ *  - rattacher : social.manage sur le Site visé, et la Ressource doit être atteinte par une Intégration
+ *    du Client de ce Site (ou de l'agence, pour un Utilisateur agence) ; une Ressource rattachée
+ *    ailleurs doit d'abord être détachée (409) ;
+ *  - détacher : social.manage sur le Site actuel ;
+ *  - déconnecter : sa propre Intégration, ou n'importe laquelle pour un Utilisateur agence.
+ * Une Ressource rattachée au Site d'un Client que l'utilisateur ne voit pas n'en montre pas le Site.
  */
 @Controller("integrations")
 export class IntegrationsController {
@@ -134,7 +140,7 @@ export class IntegrationsController {
 
     // TODO front : remplacer par une redirection vers la page des intégrations.
     // Étape suivante : PATCH /integrations/resources/:id { siteId } pour rattacher une ressource à un site.
-    return this.integrations.toPublic(await this.integrations.findById(integration.id));
+    return this.integrations.toPublic(await this.integrations.findById(integration.id), await this.rights.visibleClients(user));
   }
 
   // --- Gestion des connexions ----------------------------------------------
@@ -145,15 +151,26 @@ export class IntegrationsController {
     @Query("clientId", new ParseIntPipe({ optional: true })) clientId: number | undefined,
   ) {
     await this.requireManage(user, clientId);
-    const list = await this.integrations.list(clientId);
-    return list.map((i) => this.integrations.toPublic(i));
+    const [list, visible] = await Promise.all([this.integrations.list(clientId), this.rights.visibleClients(user)]);
+    return list.map((i) => this.integrations.toPublic(i, visible));
+  }
+
+  // Déclarée avant ":id", qui l'attraperait sinon.
+  @Get("resources")
+  async listResources(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query("clientId", new ParseIntPipe({ optional: true })) clientId: number | undefined, // absent = tous (agence)
+  ) {
+    await this.requireManage(user, clientId);
+    const [list, visible] = await Promise.all([this.integrations.listResources(clientId), this.rights.visibleClients(user)]);
+    return list.map((r) => this.integrations.toPublicResource(r, visible));
   }
 
   @Get(":id")
   async get(@CurrentUser() user: AuthenticatedUser, @Param("id", ParseIntPipe) id: number) {
     const integration = await this.integrations.findById(id);
     await this.requireManage(user, integration.client_id);
-    return this.integrations.toPublic(integration);
+    return this.integrations.toPublic(integration, await this.rights.visibleClients(user));
   }
 
   @Post(":id/resources/sync")
@@ -161,7 +178,7 @@ export class IntegrationsController {
     const integration = await this.integrations.findById(id);
     await this.requireManage(user, integration.client_id);
     await this.integrations.syncResources(id, await this.meta.fetchResources(integration));
-    return this.integrations.toPublic(await this.integrations.findById(id));
+    return this.integrations.toPublic(await this.integrations.findById(id), await this.rights.visibleClients(user));
   }
 
   @Patch("resources/:id")
@@ -174,19 +191,52 @@ export class IntegrationsController {
     if (target !== null && (typeof target !== "number" || !Number.isInteger(target))) {
       throw new BadRequestException("siteId requis (nombre, ou null pour détacher)");
     }
-    // Droit sur le Site visé et sur le Site actuel : on ne prend pas la Ressource d'un autre Site.
     const current = await this.integrations.findResourceById(id);
-    const sites = [...new Set([target, current.site_id])].filter((siteId) => siteId !== null);
-    for (const siteId of sites) await this.rights.requireFeature(user, Features.SOCIAL_MANAGE, { siteId });
-    // Ni rattachée ni à rattacher : il faut pouvoir gérer une des Intégrations qui y mènent.
-    if (sites.length === 0) await this.requireManageAny(user, current.integrations.map((l) => l.integration.client_id));
-    return this.integrations.toPublicResource(await this.integrations.attachResourceToSite(id, target));
+    const reachedBy = current.integrations.map((l) => l.integration.client_id);
+
+    if (target === null) {
+      // Détacher : droit sur le Site actuel (rien à faire si elle n'en a pas, mais il faut pouvoir la gérer).
+      if (current.site_id !== null) await this.rights.requireFeature(user, Features.SOCIAL_MANAGE, { siteId: current.site_id });
+      else await this.requireManageAny(user, reachedBy);
+    } else {
+      await this.rights.requireFeature(user, Features.SOCIAL_MANAGE, { siteId: target });
+      if (current.site_id !== null && current.site_id !== target) throw resourceAlreadyAttached();
+      if (current.site_id === null) {
+        // Pas de Ressource prise à un autre Client : le Site publiera au travers de ces Intégrations.
+        const siteClientId = await this.integrations.siteClientId(target);
+        const reachable = reachedBy.some((clientId) => clientId === siteClientId || (clientId === null && user.type === "AGENCY"));
+        if (!reachable) {
+          throw new ProblemException(
+            HttpStatus.FORBIDDEN,
+            "resource-not-reachable",
+            "Ressource hors de portée",
+            "Aucune Intégration de ce Client ne mène à cette Ressource : connecter d'abord un compte qui y a accès",
+          );
+        }
+      }
+    }
+
+    const [resource, visible] = await Promise.all([
+      this.integrations.attachResourceToSite(id, target, current.site_id),
+      this.rights.visibleClients(user),
+    ]);
+    return this.integrations.toPublicResource(resource, visible);
   }
 
   @Delete(":id")
   @HttpCode(204)
   async disconnect(@CurrentUser() user: AuthenticatedUser, @Param("id", ParseIntPipe) id: number) {
-    await this.requireManage(user, (await this.integrations.findById(id)).client_id);
+    const integration = await this.integrations.findById(id);
+    await this.requireManage(user, integration.client_id);
+    // On ne déconnecte que ses propres Intégrations ; l'agence peut tout déconnecter.
+    if (user.type !== "AGENCY" && integration.created_by_id !== user.id) {
+      throw new ProblemException(
+        HttpStatus.FORBIDDEN,
+        "not-integration-owner",
+        "Intégration d'une autre personne",
+        "Seule la personne qui a connecté ce compte, ou l'agence, peut le déconnecter",
+      );
+    }
     await this.integrations.disconnect(id);
   }
 }
