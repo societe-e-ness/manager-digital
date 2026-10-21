@@ -36,6 +36,7 @@ model User {
   created_integrations Integration[]
   plugin_codes         PluginAuthorizationCode[]
   plugin_grants        PluginAuthorization[]
+  publications         Publication[]
 
   // "user" est un mot réservé en PostgreSQL
   @@map("users")
@@ -67,6 +68,7 @@ model Site {
   resources     Resource[]
   plugin_codes  PluginAuthorizationCode[]
   plugin_grants PluginAuthorization[]
+  publications  Publication[]
 
   @@map("site")
 }
@@ -304,6 +306,7 @@ model Resource {
   children Resource[] @relation("ResourceParent")
 
   integrations IntegrationResource[]
+  publications Publication[]
 
   @@unique([provider, type, external_id])
   @@map("resource")
@@ -323,6 +326,36 @@ model IntegrationResource {
   @@id([integration_id, resource_id])
   @@index([resource_id])
   @@map("integration_resource")
+}
+
+// ─────────────────────────────────────────────
+// Diffusion des Actualités du Plugin WP
+// ─────────────────────────────────────────────
+
+// une Publication diffusée : une Actualité envoyée vers une Ressource. Ne dépend pas de
+// l'Intégration utilisée, pour survivre à sa déconnexion (et garder la Ressource en vie).
+model Publication {
+  id              Int               @id @default(autoincrement())
+  site_id         Int // le Site de l'Actualité (celui du jeton du Plugin WP)
+  article_id      String // identifiant de l'Actualité côté WordPress
+  article_url     String // lien de l'Actualité sur le Site
+  resource_id     Int // la Ressource cible
+  text            String // le texte envoyé
+  status          PublicationStatus @default(PENDING)
+  error_type      String? // raison de l'échec, `type` stable (integration-expired, content-rejected…)
+  error_detail    String?
+  network_post_id String? // identifiant de la Publication côté réseau
+  network_url     String? // lien vers la Publication sur le réseau
+  author_id       Int? // null si le compte de l'auteur a été supprimé
+  created_at      DateTime          @default(now())
+  published_at    DateTime?
+
+  site     Site     @relation(fields: [site_id], references: [id], onDelete: Cascade)
+  resource Resource @relation(fields: [resource_id], references: [id], onDelete: Restrict) // une Ressource référencée n'est jamais supprimée
+  author   User?    @relation(fields: [author_id], references: [id], onDelete: SetNull)
+
+  @@index([site_id, article_id])
+  @@map("publication")
 }
 
 // ─────────────────────────────────────────────
@@ -362,6 +395,14 @@ enum IntegrationStatus {
   REVOKED // accès retiré côté fournisseur
 
   @@map("integration_status")
+}
+
+enum PublicationStatus {
+  PENDING // en cours d'envoi
+  SUCCEEDED
+  FAILED
+
+  @@map("publication_status")
 }
 
 enum ResourceType {

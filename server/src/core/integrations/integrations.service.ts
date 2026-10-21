@@ -198,10 +198,30 @@ export class IntegrationsService {
 
   /**
    * Parmi ces Ressources, supprime celles auxquelles plus aucune Intégration ne mène et que rien
-   * ne référence (pas de Site). Les autres restent, inaccessibles tant qu'on ne les reconnecte pas.
+   * ne référence (ni Site, ni Publication diffusée). Les autres restent, inaccessibles tant qu'on
+   * ne les reconnecte pas.
    */
   private deleteOrphans(tx: Prisma.TransactionClient, resourceIds: number[]) {
-    return tx.resource.deleteMany({ where: { id: { in: resourceIds }, site_id: null, integrations: { none: {} } } });
+    return tx.resource.deleteMany({
+      where: { id: { in: resourceIds }, site_id: null, integrations: { none: {} }, publications: { none: {} } },
+    });
+  }
+
+  /**
+   * Un accès actif à la Ressource pour un Client : une Intégration ACTIVE de ce Client (ou de l'agence)
+   * qui y mène, et le jeton de page obtenu par elle. Jamais l'accès Meta d'un autre Client.
+   */
+  async activeAccess(resourceId: number, clientId: number) {
+    const link = await this.db.integrationResource.findFirst({
+      where: {
+        resource_id: resourceId,
+        access_token: { not: null },
+        integration: { status: "ACTIVE", OR: [{ client_id: clientId }, { client_id: null }] },
+      },
+      include: { integration: true },
+      orderBy: { integration_id: "asc" },
+    });
+    return link ? { integration: link.integration, pageToken: this.decrypt(link.access_token!) } : null;
   }
 
   async findResourceById(id: number) {

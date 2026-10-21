@@ -13,7 +13,7 @@ const REFRESH_MARGIN_MS = 5 * 60 * 1000;
  *
  *  1. OAuth : URL de consentement, échange du code, identité, rafraîchissement du jeton
  *  2. State signé : empêche de rattacher un compte Meta au mauvais client
- *  3. Graph API : inventaire des ressources, métriques de campagnes
+ *  3. Graph API : inventaire des ressources, publication sur une page, métriques de campagnes
  */
 @Injectable()
 export class MetaService {
@@ -39,7 +39,7 @@ export class MetaService {
       client_id: this.config.getOrThrow("META_APP_ID"),
       redirect_uri: this.redirectUri,
       response_type: "code",
-      scope: "ads_read,business_management,pages_show_list,pages_read_engagement",
+      scope: "ads_read,business_management,pages_show_list,pages_read_engagement,pages_manage_posts",
       state,
     });
     return `https://www.facebook.com/v21.0/dialog/oauth?${params}`;
@@ -156,6 +156,44 @@ export class MetaService {
   }
 
   /**
+   * Publie sur une page Facebook avec son jeton de page. Sans image : un post avec le lien (aperçu).
+   * Avec images : chacune est envoyée en photo non publiée, puis un post les regroupe ; Facebook
+   * n'accepte alors pas de lien joint, il va dans le texte. Renvoie l'identifiant et le lien du post.
+   */
+  async publishToPage(
+    integration: Integration,
+    pageToken: string,
+    pageExternalId: string,
+    post: { message: string; link: string; images: { buffer: Buffer; mimetype: string; filename: string }[] },
+  ) {
+    const body = new URLSearchParams();
+    if (post.images.length === 0) {
+      body.set("message", post.message);
+      body.set("link", post.link);
+    } else {
+      body.set("message", [post.message, post.link].filter(Boolean).join("\n\n"));
+      const photos = await Promise.all(
+        post.images.map((image) => {
+          const form = new FormData();
+          form.set("source", new Blob([new Uint8Array(image.buffer)], { type: image.mimetype }), image.filename);
+          form.set("published", "false");
+          return this.graph(integration, `/${pageExternalId}/photos`, {}, pageToken, form);
+        }),
+      );
+      photos.forEach((photo, i) => body.set(`attached_media[${i}]`, JSON.stringify({ media_fbid: photo.id })));
+    }
+
+    const created = await this.graph(integration, `/${pageExternalId}/feed`, {}, pageToken, body);
+    const postId = created.id as string;
+    // Le post est en ligne : un échec de la lecture de son lien ne doit pas le faire passer pour raté
+    // (l'utilisateur relancerait, et le publierait deux fois).
+    const url = await this.graph(integration, `/${postId}`, { fields: "permalink_url" }, pageToken)
+      .then((details) => details.permalink_url as string)
+      .catch(() => `https://www.facebook.com/${postId}`);
+    return { postId, url };
+  }
+
+  /**
    * Métriques par campagne d'un compte publicitaire sur une période, traduites dans notre vocabulaire.
    * `integration` : n'importe quelle Intégration ACTIVE qui mène au compte (voir findActiveResources).
    */
@@ -185,14 +223,21 @@ export class MetaService {
   /**
    * Appel Graph avec le jeton utilisateur de l'intégration, rafraîchi s'il expire bientôt.
    * Marque l'intégration EXPIRED si Meta répond que le jeton n'est plus bon.
-   * Pour une page, passer son jeton propre déchiffré en `tokenOverride`.
+   * Pour une page, passer son jeton propre déchiffré en `tokenOverride`. Avec `body` : un POST.
    */
-  private async graph(integration: Integration, path: string, query: Record<string, string> = {}, tokenOverride?: string) {
+  private async graph(
+    integration: Integration,
+    path: string,
+    query: Record<string, string> = {},
+    tokenOverride?: string,
+    body?: URLSearchParams | FormData,
+  ) {
     const token = tokenOverride ?? (await this.validAccessToken(integration));
     try {
-      return await this.graphRaw(token, path, query);
+      return await this.graphRaw(token, path, query, body);
     } catch (e) {
-      if (e instanceof MetaAuthError) await this.integrations.markAsExpired(integration.id);
+      // un jeton de page refusé ne dit rien du jeton de la personne : seul ce dernier expire l'Intégration
+      if (e instanceof MetaAuthError && !tokenOverride) await this.integrations.markAsExpired(integration.id);
       throw e;
     }
   }
@@ -209,16 +254,19 @@ export class MetaService {
     return items;
   }
 
-  /** Le `fetch` nu vers la Graph API, sans logique de jeton. */
-  private async graphRaw(accessToken: string, path: string, query: Record<string, string> = {}) {
+  /** Le `fetch` nu vers la Graph API, sans logique de jeton. Avec `body` : un POST. */
+  private async graphRaw(accessToken: string, path: string, query: Record<string, string> = {}, body?: URLSearchParams | FormData) {
     const params = new URLSearchParams({ ...query, access_token: accessToken });
-    const res = await fetch(`${GRAPH_URL}${path}?${params}`);
+    const res = await fetch(`${GRAPH_URL}${path}?${params}`, body ? { method: "POST", body } : undefined);
+    if (res.ok) return res.json();
 
-    if (res.status === 401 || res.status === 403) {
-      throw new MetaAuthError(`Jeton Meta expiré ou révoqué (${res.status}) : ${await res.text()}`);
+    // Meta signale un jeton expiré ou révoqué par le code 190 (souvent en HTTP 400), parfois par un 401
+    const text = await res.text();
+    const code = parseMetaErrorCode(text);
+    if (res.status === 401 || res.status === 403 || code === 190 || code === 102) {
+      throw new MetaAuthError(`Jeton Meta expiré ou révoqué (${res.status}) : ${text}`);
     }
-    if (!res.ok) throw new Error(`Erreur Meta (${res.status}) : ${await res.text()}`);
-    return res.json();
+    throw new MetaRequestError(res.status, code, `Erreur Meta (${res.status}) : ${text}`);
   }
 
   private async validAccessToken(integration: Integration) {
@@ -229,6 +277,45 @@ export class MetaService {
 }
 
 class MetaAuthError extends Error {}
+
+/** Meta a répondu par une erreur autre qu'un jeton invalide. */
+class MetaRequestError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: number | undefined,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+function parseMetaErrorCode(body: string): number | undefined {
+  try {
+    const code = JSON.parse(body)?.error?.code;
+    return typeof code === "number" ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// codes Meta d'erreur temporaire ou de limite de débit : réessayer plus tard suffit
+const META_TRANSIENT_CODES = new Set([1, 2, 4, 17, 32, 341, 613]);
+
+/**
+ * La raison d'un échec d'appel à Meta, en `type` stable pour le Plugin WP :
+ * integration-expired, permission-missing, content-rejected ou network-unavailable.
+ * Renvoie undefined pour une erreur qui ne vient pas de Meta (bogue, base de données…).
+ */
+export function metaFailureType(error: unknown) {
+  if (error instanceof MetaAuthError) return "integration-expired";
+  if (error instanceof MetaRequestError) {
+    if (error.code === 10 || (error.code !== undefined && error.code >= 200 && error.code < 300)) return "permission-missing";
+    if (error.status >= 500 || (error.code !== undefined && META_TRANSIENT_CODES.has(error.code))) return "network-unavailable";
+    return "content-rejected";
+  }
+  if (error instanceof TypeError && error.message === "fetch failed") return "network-unavailable"; // Meta injoignable
+  return undefined;
+}
 
 function isoDate(date: Date) {
   return date.toISOString().slice(0, 10);

@@ -14,7 +14,8 @@ export interface GraphCall {
   method: string;
   path: string; // sans la version : "/me/accounts"
   query: URLSearchParams;
-  body?: string;
+  body?: string; // formulaire encodé : new URLSearchParams(call.body)
+  form?: FormData; // envoi multipart (photos)
 }
 
 /**
@@ -28,7 +29,7 @@ export class FakeGraph {
   install() {
     this.calls.length = 0;
     this.routes = [];
-    interceptHost(GRAPH_HOST, ({ method, url, body }) => {
+    interceptHost(GRAPH_HOST, ({ method, url, body, form }) => {
       const path = url.pathname.replace(/^\/v\d+\.\d+/, "");
       const route = this.routes.find(
         (r) =>
@@ -37,7 +38,7 @@ export class FakeGraph {
           Object.entries(r.query).every(([name, value]) => url.searchParams.get(name) === value),
       );
       if (!route) return undefined;
-      this.calls.push({ method, path, query: url.searchParams, body });
+      this.calls.push({ method, path, query: url.searchParams, body, form });
       return jsonResponse(route.body, route.status);
     });
   }

@@ -3,6 +3,7 @@ export interface InterceptedRequest {
   url: URL;
   headers: Headers;
   body?: string;
+  form?: FormData; // envoi multipart (fichiers) : gardé tel quel pour que les tests lisent ses champs
 }
 
 /** Répond à une requête, ou renvoie undefined si elle n'était pas prévue. */
@@ -48,9 +49,10 @@ async function dispatch(input: string | URL | Request, init?: RequestInit) {
   const url = new URL(request ? request.url : input.toString());
   const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
   const headers = new Headers(init?.headers ?? request?.headers);
-  const body = init?.body != null ? String(init.body) : request ? await request.clone().text() : undefined;
+  const form = init?.body instanceof FormData ? init.body : undefined;
+  const body = form ? undefined : init?.body != null ? String(init.body) : request ? await request.clone().text() : undefined;
 
-  const response = await handlers.get(url.hostname)?.({ method, url, headers, body: body || undefined });
+  const response = await handlers.get(url.hostname)?.({ method, url, headers, body: body || undefined, form });
   if (!response) {
     const call = `${method} ${url.origin}${url.pathname}`;
     unexpected.push(call);
