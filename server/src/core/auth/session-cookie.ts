@@ -6,6 +6,11 @@ const SESSION_COOKIE = "md_session";
 const SSO_FLOW_COOKIE = "md_sso";
 const SSO_FLOW_PATH = "/auth/sso";
 
+/** Le chemin du cookie de flux SSO tel que vu par le navigateur : sous le préfixe public de l'API (ex. /api). */
+function ssoFlowPath(config: ConfigService) {
+  return new URL(config.getOrThrow<string>("APP_PUBLIC_URL")).pathname.replace(/\/+$/, "") + SSO_FLOW_PATH;
+}
+
 /** Un cookie lu dans l'en-tête Cookie, sans dépendance supplémentaire. */
 function readCookie(req: Request, cookieName: string) {
   for (const part of (req.headers.cookie ?? "").split(";")) {
@@ -45,9 +50,9 @@ export function readSsoFlowCookie(req: Request) {
 }
 
 export function setSsoFlowCookie(res: Response, config: ConfigService, flow: string, maxAgeMs: number) {
-  res.cookie(SSO_FLOW_COOKIE, flow, { ...cookieOptions(config), path: SSO_FLOW_PATH, maxAge: maxAgeMs });
+  res.cookie(SSO_FLOW_COOKIE, flow, { ...cookieOptions(config), path: ssoFlowPath(config), maxAge: maxAgeMs });
 }
 
 export function clearSsoFlowCookie(res: Response, config: ConfigService) {
-  res.clearCookie(SSO_FLOW_COOKIE, { ...cookieOptions(config), path: SSO_FLOW_PATH });
+  res.clearCookie(SSO_FLOW_COOKIE, { ...cookieOptions(config), path: ssoFlowPath(config) });
 }
