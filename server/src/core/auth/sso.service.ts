@@ -1,10 +1,16 @@
 import { HttpStatus, Injectable, Logger } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
-import * as jose from "jose";
-import * as client from "openid-client";
+import type * as Jose from "jose";
+import type * as OpenIdClient from "openid-client";
 import type { UserType } from "../../generated/prisma/client";
 import { decrypt, encrypt, encryptionKey } from "../crypto/encryption";
 import { ProblemException } from "../problems/problem.exception";
+
+// jose et openid-client sont des modules ESM uniquement : chargés par import(), qui fonctionne
+// depuis du CommonJS partout, alors qu'un require() de module ESM est refusé par certains
+// environnements (le lanceur de fonctions Vercel : ERR_REQUIRE_ESM).
+const loadJose = () => import("jose");
+const loadOpenIdClient = () => import("openid-client");
 
 const FLOW_TTL_MS = 10 * 60 * 1000;
 const BACKCHANNEL_EVENT = "http://schemas.openid.net/event/backchannel-logout";
@@ -39,8 +45,8 @@ export interface SsoIdentity {
 export class SsoService {
   private readonly logger = new Logger(SsoService.name);
   private readonly key: Buffer;
-  private configuration?: Promise<client.Configuration>;
-  private jwks?: ReturnType<typeof jose.createRemoteJWKSet>;
+  private configuration?: Promise<OpenIdClient.Configuration>;
+  private jwks?: ReturnType<typeof Jose.createRemoteJWKSet>;
 
   constructor(private readonly config: ConfigService) {
     this.key = encryptionKey(config.getOrThrow<string>("ENCRYPTION_KEY"));
@@ -55,6 +61,7 @@ export class SsoService {
   /** L'URL d'auth.eness, et le flux (chiffré) à garder dans un cookie jusqu'au retour. */
   async startLogin(returnTo: unknown) {
     const oidc = await this.oidc();
+    const client = await loadOpenIdClient();
     const flow: SsoFlow = {
       codeVerifier: client.randomPKCECodeVerifier(),
       state: client.randomState(),
@@ -98,8 +105,9 @@ export class SsoService {
    */
   async completeLogin(currentUrl: URL, flow: SsoFlow): Promise<SsoIdentity> {
     const oidc = await this.oidc();
+    const client = await loadOpenIdClient();
 
-    let tokens: Awaited<ReturnType<typeof client.authorizationCodeGrant>>;
+    let tokens: Awaited<ReturnType<typeof OpenIdClient.authorizationCodeGrant>>;
     try {
       tokens = await client.authorizationCodeGrant(oidc, currentUrl, {
         pkceCodeVerifier: flow.codeVerifier,
@@ -142,8 +150,9 @@ export class SsoService {
    */
   async recheck(encryptedRefreshToken: string | null): Promise<SsoRecheck> {
     if (!encryptedRefreshToken) return { status: "lost" };
+    const client = await loadOpenIdClient();
 
-    let tokens: Awaited<ReturnType<typeof client.refreshTokenGrant>>;
+    let tokens: Awaited<ReturnType<typeof OpenIdClient.refreshTokenGrant>>;
     try {
       tokens = await client.refreshTokenGrant(await this.oidc(), decrypt(this.key, encryptedRefreshToken));
     } catch (e) {
@@ -168,6 +177,7 @@ export class SsoService {
 
   /** L'écran de déconnexion d'auth.eness (revenir sur l'application, ou quitter tous les services). */
   async endSessionUrl(idToken: string) {
+    const client = await loadOpenIdClient();
     const url = client.buildEndSessionUrl(await this.oidc(), {
       id_token_hint: idToken,
       post_logout_redirect_uri: `${this.config.getOrThrow<string>("CLIENT_PUBLIC_URL")}/`,
@@ -181,6 +191,7 @@ export class SsoService {
    */
   async verifyLogoutToken(token: unknown): Promise<{ sid?: string; sub?: string }> {
     const oidc = await this.oidc();
+    const jose = await loadJose();
     try {
       if (typeof token !== "string") throw new Error("logout_token absent");
       const metadata = oidc.serverMetadata();
@@ -225,12 +236,14 @@ export class SsoService {
         "La connexion SSO n'est pas activée : utiliser le lien magique",
       );
     }
-    this.configuration ??= client
-      .discovery(
-        new URL(this.config.getOrThrow<string>("OIDC_ISSUER")),
-        this.config.getOrThrow<string>("OIDC_CLIENT_ID"),
-        undefined,
-        client.ClientSecretBasic(this.config.getOrThrow<string>("OIDC_CLIENT_SECRET")),
+    this.configuration ??= loadOpenIdClient()
+      .then((client) =>
+        client.discovery(
+          new URL(this.config.getOrThrow<string>("OIDC_ISSUER")),
+          this.config.getOrThrow<string>("OIDC_CLIENT_ID"),
+          undefined,
+          client.ClientSecretBasic(this.config.getOrThrow<string>("OIDC_CLIENT_SECRET")),
+        ),
       )
       .catch((e: unknown) => {
         this.configuration = undefined;
