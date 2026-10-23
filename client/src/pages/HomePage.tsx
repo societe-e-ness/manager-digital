@@ -40,6 +40,9 @@ export function HomePage() {
           <p>
             Connecté : {user.name ?? user.email} ({user.email})
           </p>
+          <p>
+            <a href="/reseaux-sociaux">Réseaux sociaux</a>
+          </p>
           <button type="button" onClick={logout}>
             Se déconnecter
           </button>

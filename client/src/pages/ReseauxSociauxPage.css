@@ -1,0 +1,58 @@
+/* Page « Réseaux sociaux » : le strict minimum pour être lisible. Tout est préfixé .rs pour ne pas toucher aux autres pages. */
+
+.rs {
+  max-width: 880px;
+  margin: 2rem auto;
+  padding: 0 1rem;
+  font-family: system-ui, sans-serif;
+  color: #1f2937;
+}
+
+.rs h1 { margin: 0.5rem 0 1.5rem; }
+.rs h2 { margin: 0; font-size: 1.05rem; }
+.rs-back { color: #6b7280; text-decoration: none; font-size: 0.9rem; }
+.rs-muted { color: #6b7280; }
+
+.rs-client { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1.25rem; font-weight: 600; }
+
+.rs-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 1.25rem;
+  margin-bottom: 1.25rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+}
+.rs-card-head { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: 0.75rem; }
+.rs-card > h2 { margin-bottom: 0.75rem; }
+
+.rs-list { list-style: none; margin: 0; padding: 0; }
+.rs-list li { display: flex; align-items: center; gap: 0.75rem; padding: 0.6rem 0; border-top: 1px solid #f3f4f6; }
+.rs-list li > span:first-child { flex: 1; }
+
+.rs-table { width: 100%; border-collapse: collapse; }
+.rs-table td { padding: 0.6rem 0.5rem; border-top: 1px solid #f3f4f6; vertical-align: middle; }
+.rs-table td:last-child { text-align: right; }
+.rs-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
+
+.rs button, .rs select {
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.35rem 0.75rem;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.rs button:hover, .rs select:hover { border-color: #9ca3af; }
+.rs .rs-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
+.rs .rs-primary:hover { background: #1d4ed8; }
+.rs .rs-danger { color: #b91c1c; }
+
+.rs-tag { display: inline-block; margin-right: 0.35rem; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.8rem; background: #f3f4f6; color: #4b5563; }
+.rs-tag-ok { background: #dcfce7; color: #166534; }
+.rs-tag-warn { background: #fef3c7; color: #92400e; }
+
+.rs-notice { padding: 0.6rem 0.9rem; border-radius: 8px; }
+.rs-notice-ok { background: #ecfdf5; color: #065f46; }
+.rs-notice-error { background: #fef2f2; color: #991b1b; }

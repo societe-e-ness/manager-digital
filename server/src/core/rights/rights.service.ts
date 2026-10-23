@@ -67,6 +67,16 @@ export class RightsService {
     return memberships.map((m) => m.client_id);
   }
 
+  /** Les Clients visibles et leurs Sites, par nom puis par domaine. */
+  async visibleClientsWithSites(user: AuthenticatedUser) {
+    const visible = await this.visibleClients(user);
+    return this.db.client.findMany({
+      where: visible === "all" ? {} : { id: { in: visible } },
+      select: { id: true, name: true, sites: { select: { id: true, domain: true }, orderBy: { domain: "asc" } } },
+      orderBy: { name: "asc" },
+    });
+  }
+
   async hasFeature(user: AuthenticatedUser, slug: string, scope: RightsScope = {}) {
     return (await this.sitesWithFeature(user, slug, scope)).length > 0;
   }

@@ -16,6 +16,8 @@ import { givenOverride, givenSite } from "./support/rights";
  *   Intégration du Client A (Marie) → page-a, page-partagee
  *   Intégration du Client B (Bob)   → page-b, page-partagee
  */
+const FRONT = "http://localhost:5173";
+
 describe("Rattachement et visibilité selon le Client (HTTP)", () => {
   let app: INestApplication;
   let db: DatabaseService;
@@ -237,10 +239,55 @@ describe("Rattachement et visibilité selon le Client (HTTP)", () => {
       graph.on("GET", "/me/adaccounts", { data: [] });
       graph.on("GET", "/me/accounts", { data: [{ id: "page-commune", name: "Page commune", access_token: "page-token" }] });
 
-      const res = await agent.get(`/integrations/oauth/callback?code=abc&state=${state}`).expect(200);
-      expect(JSON.stringify(res.body)).not.toContain("token");
-      return res.body as { id: number; client_id: number | null; created_by_id: number };
+      // retour vers la page de gestion du front, pour ce Client
+      const res = await agent.get(`/integrations/oauth/callback?code=abc&state=${state}`).expect(302);
+      const back = new URL(res.headers.location);
+      expect(back.origin + back.pathname).toBe(`${FRONT}/reseaux-sociaux`);
+      expect(back.searchParams.get("clientId")).toBe(String(clientId));
+      expect(back.searchParams.get("connexion")).toBe("ok");
+      expect(res.headers.location).not.toContain("token");
+      return db.integration.findFirstOrThrow({ where: { external_user_id: metaUserId, client_id: clientId } });
     }
+
+    /** Départ vers Meta pour ce Client : le state signé que Meta renverra. */
+    async function startConnection(agent: TestAgent, clientId: number) {
+      const started = await agent.get(`/integrations/oauth/connect?clientId=${clientId}`).expect(302);
+      return new URL(started.headers.location).searchParams.get("state")!;
+    }
+
+    function expectBackWithError(location: string, type: string) {
+      const back = new URL(location);
+      expect(back.origin + back.pathname).toBe(`${FRONT}/reseaux-sociaux`);
+      expect(back.searchParams.get("clientId")).toBe(String(clientA));
+      expect(back.searchParams.get("erreur")).toBe(type);
+      expect(back.searchParams.get("connexion")).toBeNull();
+    }
+
+    it("un consentement refusé chez Meta ramène vers la page avec une erreur explicite", async () => {
+      const state = await startConnection(marie, clientA);
+
+      const res = await marie.get(`/integrations/oauth/callback?error=access_denied&state=${state}`).expect(302);
+
+      expectBackWithError(res.headers.location, "meta-consent-refused");
+      expect(graph.calls).toHaveLength(0);
+    });
+
+    it("un droit retiré pendant la connexion ramène vers la page avec l'erreur, sans appeler Meta", async () => {
+      const state = await startConnection(marie, clientA);
+      await db.userFeature.deleteMany({ where: { user_id: ids.marie } });
+
+      const res = await marie.get(`/integrations/oauth/callback?code=abc&state=${state}`).expect(302);
+
+      expectBackWithError(res.headers.location, "missing-feature");
+      expect(graph.calls).toHaveLength(0);
+    });
+
+    it("la liste des Intégrations dit qui les a connectées", async () => {
+      const res = await marie.get(`/integrations?clientId=${clientA}`).expect(200);
+      expect(res.body.map((i: { created_by: unknown }) => i.created_by)).toEqual([
+        { id: ids.marie, email: "marie@client-a.fr", name: null },
+      ]);
+    });
 
     it("le même compte Meta connecté pour deux Clients donne deux Intégrations, sans toucher à celle de l'autre", async () => {
       const forA = await connectMeta(marie, clientA, "meta-freelance");

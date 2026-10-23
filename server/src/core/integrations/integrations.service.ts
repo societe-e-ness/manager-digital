@@ -28,6 +28,7 @@ const RESOURCE_ACCESS = {
 /** Une Intégration et les Ressources auxquelles elle mène. */
 const WITH_RESOURCES = {
   resources: { include: { resource: { include: RESOURCE_ACCESS } }, orderBy: { resource_id: "asc" } },
+  created_by: { select: { id: true, email: true, name: true } }, // qui a connecté le compte
 } satisfies Prisma.IntegrationInclude;
 
 type ResourceWithAccess = Resource & {

@@ -188,9 +188,12 @@ describe("Connexion par lien magique et sessions (HTTP)", () => {
       const started = await pirate.get(`/integrations/oauth/connect?clientId=${pirateClientId}`).expect(302);
       const state = new URL(started.headers.location).searchParams.get("state")!;
 
-      // …que Marie termine depuis sa propre session : refusé avant tout appel à Meta
-      const res = await marie.get(`/integrations/oauth/callback?code=abc&state=${state}`).expect(403);
-      expect(res.body.type).toBe("oauth-state-mismatch");
+      // …que Marie termine depuis sa propre session : refusé avant tout appel à Meta,
+      // et renvoyé vers la page de gestion du front avec l'erreur
+      const res = await marie.get(`/integrations/oauth/callback?code=abc&state=${state}`).expect(302);
+      const back = new URL(res.headers.location).searchParams;
+      expect(back.get("erreur")).toBe("oauth-state-mismatch");
+      expect(back.get("clientId")).toBeNull(); // le Client du pirate ne finit pas dans l'URL de Marie
     });
   });
 });

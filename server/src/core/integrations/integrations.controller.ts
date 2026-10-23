@@ -6,26 +6,30 @@ import {
   Get,
   HttpStatus,
   HttpCode,
+  Logger,
   Param,
   ParseIntPipe,
   Patch,
   Post,
   Query,
   Res,
+  UnauthorizedException,
 } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
 import type { Response } from "express";
 import type { AuthenticatedUser } from "../auth/auth.service";
 import { CurrentUser } from "../auth/session.guard";
 import { ProblemException } from "../problems/problem.exception";
 import { Features, missingFeature, RightsService } from "../rights/rights.service";
 import { IntegrationsService, resourceAlreadyAttached } from "./integrations.service";
-import { MetaService } from "./meta.service";
+import { MetaService, metaFailureType } from "./meta.service";
 
 /**
  * Toutes les routes du module.
  *
  *   GET    /integrations/oauth/connect?clientId=…           → envoie la personne chez Meta
- *   GET    /integrations/oauth/callback                      → Meta la renvoie avec un code
+ *   GET    /integrations/oauth/callback                      → Meta la renvoie avec un code ; redirige vers le front
+ *                                                              (/reseaux-sociaux?clientId=…&connexion=ok ou &erreur=…)
  *   GET    /integrations?clientId=…                          → liste les intégrations (et leurs ressources)
  *   GET    /integrations/resources?clientId=…                → les ressources visibles du client
  *   GET    /integrations/:id                                 → une intégration et ses ressources
@@ -46,10 +50,13 @@ import { MetaService } from "./meta.service";
  */
 @Controller("integrations")
 export class IntegrationsController {
+  private readonly logger = new Logger(IntegrationsController.name);
+
   constructor(
     private readonly integrations: IntegrationsService,
     private readonly meta: MetaService,
     private readonly rights: RightsService,
+    private readonly config: ConfigService,
   ) {}
 
   /**
@@ -94,17 +101,42 @@ export class IntegrationsController {
     return res.redirect(this.meta.buildAuthorizationUrl(state));
   }
 
+  /**
+   * Meta renvoie ici le navigateur. On le ramène toujours vers la page de gestion du front :
+   * `/reseaux-sociaux?clientId=…&connexion=ok`, ou `&erreur=<type>` en cas d'échec.
+   */
   @Get("oauth/callback")
   async callback(
     @CurrentUser() user: AuthenticatedUser,
     @Query("code") code: string | undefined,
     @Query("state") state: string | undefined,
     @Query("error") error: string | undefined,
+    @Res() res: Response,
+  ) {
+    const back = new URL("/reseaux-sociaux", this.config.getOrThrow<string>("CLIENT_PUBLIC_URL"));
+    let clientId: number | null = null;
+    try {
+      const verified = this.meta.verifyState(state);
+      // le Client d'un state lancé par quelqu'un d'autre ne doit pas finir dans l'URL de la victime
+      if (verified.userId === user.id) clientId = verified.clientId;
+      await this.completeConnection(user, verified, code, error);
+      back.searchParams.set("connexion", "ok");
+    } catch (e) {
+      back.searchParams.set("erreur", this.callbackErrorType(e));
+    }
+    if (clientId !== null) back.searchParams.set("clientId", String(clientId));
+    res.redirect(back.href);
+  }
+
+  private async completeConnection(
+    user: AuthenticatedUser,
+    { userId, clientId }: { userId: number; clientId: number | null },
+    code: string | undefined,
+    error: string | undefined,
   ) {
     // Le state signé dit qui a lancé la connexion et pour quel client. On vérifie en plus
     // que c'est bien cette personne qui revient : sinon un state volé permettrait de faire
     // rattacher le compte Meta d'une victime à la session d'un attaquant.
-    const { userId, clientId } = this.meta.verifyState(state);
     if (userId !== user.id) {
       throw new ProblemException(
         HttpStatus.FORBIDDEN,
@@ -116,7 +148,12 @@ export class IntegrationsController {
 
     if (error || !code) {
       // La personne a refusé le consentement, ou Meta a échoué.
-      throw new BadRequestException(`Connexion Meta refusée : ${error ?? "code manquant"}`);
+      throw new ProblemException(
+        HttpStatus.BAD_REQUEST,
+        "meta-consent-refused",
+        "Connexion Meta refusée",
+        `Connexion Meta refusée : ${error ?? "code manquant"}`,
+      );
     }
 
     // Le droit a pu être retiré depuis le départ chez Meta : on le revérifie avant tout appel.
@@ -126,7 +163,7 @@ export class IntegrationsController {
     const token = await this.meta.exchangeCode(code);
     // 2. qui est-ce, et quelles permissions a-t-elle accordées
     const identity = await this.meta.fetchIdentity(token.accessToken);
-    // 3. la clé : créée, ou mise à jour si cette personne s'était déjà connectée
+    // 3. la clé : créée, ou mise à jour si cette personne s'était déjà connectée pour ce Client
     const integration = await this.integrations.upsertFromOAuth({
       externalUserId: identity.externalUserId,
       accessToken: token.accessToken,
@@ -137,10 +174,16 @@ export class IntegrationsController {
     });
     // 4. les portes : pages, comptes Instagram, comptes publicitaires
     await this.integrations.syncResources(integration.id, await this.meta.fetchResources(integration));
+  }
 
-    // TODO front : remplacer par une redirection vers la page des intégrations.
-    // Étape suivante : PATCH /integrations/resources/:id { siteId } pour rattacher une ressource à un site.
-    return this.integrations.toPublic(await this.integrations.findById(integration.id), await this.rights.visibleClients(user));
+  /** Le `type` d'erreur transmis au front après un retour de Meta raté. */
+  private callbackErrorType(e: unknown) {
+    if (e instanceof ProblemException) return e.type;
+    if (e instanceof UnauthorizedException) return "oauth-state-invalid"; // state forgé ou périmé
+    this.logger.error(`Connexion Meta impossible : ${e instanceof Error ? e.stack : String(e)}`);
+    const meta = metaFailureType(e);
+    if (meta === "network-unavailable") return "meta-unavailable"; // panne ou limite de Meta : réessayer plus tard
+    return meta ? "meta-connection-failed" : "internal-error"; // Meta a refusé, ou erreur chez nous
   }
 
   // --- Gestion des connexions ----------------------------------------------
