@@ -1,11 +1,13 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { DatabaseService } from "./database.service";
+import { ConfigModule } from "@nestjs/config";
 
 describe("DatabaseService", () => {
   let service: DatabaseService;
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
+      imports: [ConfigModule.forRoot()],
       providers: [DatabaseService],
     }).compile();
 
@@ -27,7 +29,7 @@ describe("DatabaseService", () => {
 
   it("should create a new user", async () => {
     const randomId = Math.floor(Math.random() * 10000);
-    const user = { email: `test${randomId}@test.com`, name: `test${randomId}` };
+    const user = { email: `test${randomId}@test.com`, name: `test${randomId}`, type: "CLIENT" as const };
     const result = await service.user.create({ data: user });
 
     expect(result).toMatchObject(user);

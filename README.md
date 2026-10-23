@@ -64,12 +64,23 @@ npm run build -w server              # lance prisma generate puis nest build
 npm run dev:server
 ```
 
+### Tests
+
+```sh
+npm run test -w server       # tests unitaires
+npm run test:e2e -w server   # tests HTTP : application complète sur une base de test
+```
+
+- Les tests HTTP exigent `TEST_DATABASE_URL` dans `server/.env`. Cette base est **vidée entre chaque test** : elle doit être distincte des autres et son nom doit finir par `_test`. Les migrations y sont appliquées au lancement.
+- Meta et auth.eness y sont remplacés par des faux (`server/test/support/`). Aucun appel ne part sur le réseau.
+- Les scripts lancent Jest avec `--experimental-vm-modules`, parce qu'`openid-client` et `jose` sont des modules ESM. L'application, elle, n'a pas besoin de ce drapeau : Node 24 les charge nativement.
+
 ### Prisma 7
 
 - `server/prisma.config.ts` porte le chemin du schéma, des migrations et l'URL de connexion.
 - `server/prisma/schema.prisma` utilise le générateur `prisma-client` en CommonJS.
   Le client est généré dans `server/src/generated/prisma` (ignoré, régénéré au build).
-- Le runtime se connecte via le driver adapter `PrismaPg` (`server/src/prisma/prisma.service.ts`).
+- Le runtime se connecte via le driver adapter `PrismaPg` (`server/src/core/database/database.service.ts`).
 - Les variables d'environnement sont chargées explicitement avec `dotenv`.
 
 ### ⚠️ Ne pas utiliser `@latest` pour Prisma
