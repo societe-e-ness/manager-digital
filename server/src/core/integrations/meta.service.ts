@@ -5,6 +5,16 @@ import type { Integration } from "../../generated/prisma/client";
 import { IntegrationsService, type ResourceInput } from "./integrations.service";
 
 const GRAPH_URL = "https://graph.facebook.com/v21.0";
+
+/** Une Publication lue chez Meta, traduite dans notre vocabulaire. */
+export interface NetworkPost {
+  id: string; // identifiant côté réseau
+  network: "facebook" | "instagram";
+  text: string;
+  images: string[]; // URL des images (vignette pour une vidéo)
+  date: string; // ISO 8601
+  url: string; // lien vers la Publication d'origine
+}
 const STATE_TTL_MS = 10 * 60 * 1000;
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
@@ -13,7 +23,8 @@ const REFRESH_MARGIN_MS = 5 * 60 * 1000;
  *
  *  1. OAuth : URL de consentement, échange du code, identité, rafraîchissement du jeton
  *  2. State signé : empêche de rattacher un compte Meta au mauvais client
- *  3. Graph API : inventaire des ressources, publication sur une page, métriques de campagnes
+ *  3. Graph API : inventaire des ressources, lecture et publication sur une page, lecture Instagram,
+ *     métriques de campagnes
  */
 @Injectable()
 export class MetaService {
@@ -39,7 +50,15 @@ export class MetaService {
       client_id: this.config.getOrThrow("META_APP_ID"),
       redirect_uri: this.redirectUri,
       response_type: "code",
-      scope: "ads_read,business_management,pages_show_list,pages_read_engagement,pages_manage_posts",
+      scope: [
+        "ads_read",
+        "business_management",
+        "pages_show_list",
+        "pages_read_engagement",
+        "pages_read_user_content", // lecture du contenu des pages
+        "pages_manage_posts", // publication sur les pages
+        "instagram_basic", // lecture des comptes Instagram et de leurs médias
+      ].join(","),
       state,
     });
     return `https://www.facebook.com/v21.0/dialog/oauth?${params}`;
@@ -153,6 +172,58 @@ export class MetaService {
       }
     }
     return resources;
+  }
+
+  /** Les dernières Publications d'une page Facebook (jeton de page), de la plus récente à la plus ancienne. */
+  async fetchPagePosts(integration: Integration, pageToken: string, pageExternalId: string, limit: number): Promise<NetworkPost[]> {
+    const data = await this.graph(
+      integration,
+      `/${pageExternalId}/posts`,
+      { fields: "id,message,created_time,permalink_url,full_picture,attachments{media,subattachments}", limit: String(limit) },
+      pageToken,
+    );
+    return (data.data ?? []).flatMap((post: any) => {
+      const date = metaDate(post.created_time);
+      if (!date) return []; // un post mal formé est écarté, pas toute la page
+      // un album : ses sous-pièces jointes ; sinon la pièce jointe, ou à défaut l'image principale
+      const attachment = post.attachments?.data?.[0];
+      const pieces = attachment?.subattachments?.data ?? (attachment ? [attachment] : []);
+      const images = pieces.map((p: any) => p.media?.image?.src).filter(Boolean);
+      return [
+        {
+          id: post.id,
+          network: "facebook" as const,
+          text: post.message ?? "",
+          images: images.length > 0 ? images : post.full_picture ? [post.full_picture] : [],
+          date,
+          url: post.permalink_url,
+        },
+      ];
+    });
+  }
+
+  /** Les derniers médias d'un compte Instagram (jeton de la personne), du plus récent au plus ancien. */
+  async fetchInstagramMedia(integration: Integration, igExternalId: string, limit: number): Promise<NetworkPost[]> {
+    const data = await this.graph(integration, `/${igExternalId}/media`, {
+      fields: "id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,children{media_type,media_url,thumbnail_url}",
+      limit: String(limit),
+    });
+    // une vidéo n'a pas d'image : on prend sa vignette
+    const image = (m: any) => (m.media_type === "VIDEO" ? m.thumbnail_url : m.media_url);
+    return (data.data ?? []).flatMap((media: any) => {
+      const date = metaDate(media.timestamp);
+      if (!date) return []; // un média mal formé est écarté, pas tout le compte
+      return [
+        {
+          id: media.id,
+          network: "instagram" as const,
+          text: media.caption ?? "",
+          images: (media.media_type === "CAROUSEL_ALBUM" ? (media.children?.data ?? []) : [media]).map(image).filter(Boolean),
+          date,
+          url: media.permalink,
+        },
+      ];
+    });
   }
 
   /**
@@ -315,6 +386,13 @@ export function metaFailureType(error: unknown) {
   }
   if (error instanceof TypeError && error.message === "fetch failed") return "network-unavailable"; // Meta injoignable
   return undefined;
+}
+
+/** Meta donne les dates en « 2026-10-20T09:00:00+0000 » : on normalise en ISO 8601. */
+function metaDate(value: unknown) {
+  if (typeof value !== "string") return null;
+  const date = new Date(value.replace(/([+-]\d{2})(\d{2})$/, "$1:$2"));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
 }
 
 function isoDate(date: Date) {

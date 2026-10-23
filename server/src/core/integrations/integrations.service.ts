@@ -36,6 +36,14 @@ type ResourceWithAccess = Resource & {
   site: { client_id: number } | null;
 };
 
+/** Un lien vers la Ressource par une Intégration ACTIVE du Client (ou de l'agence) : jamais l'accès d'un autre Client. */
+function activeLinkOf(resourceId: number, clientId: number) {
+  return {
+    resource_id: resourceId,
+    integration: { status: "ACTIVE", OR: [{ client_id: clientId }, { client_id: null }] },
+  } satisfies Prisma.IntegrationResourceWhereInput;
+}
+
 /** 409 : la Ressource est (ou vient d'être) rattachée à un autre Site. */
 export function resourceAlreadyAttached() {
   return new ProblemException(
@@ -214,15 +222,21 @@ export class IntegrationsService {
    */
   async activeAccess(resourceId: number, clientId: number) {
     const link = await this.db.integrationResource.findFirst({
-      where: {
-        resource_id: resourceId,
-        access_token: { not: null },
-        integration: { status: "ACTIVE", OR: [{ client_id: clientId }, { client_id: null }] },
-      },
+      where: { ...activeLinkOf(resourceId, clientId), access_token: { not: null } },
       include: { integration: true },
       orderBy: { integration_id: "asc" },
     });
     return link ? { integration: link.integration, pageToken: this.decrypt(link.access_token!) } : null;
+  }
+
+  /** Une Intégration ACTIVE de ce Client (ou de l'agence) qui mène à la Ressource (comptes Instagram : jeton de la personne). */
+  async activeIntegration(resourceId: number, clientId: number) {
+    const link = await this.db.integrationResource.findFirst({
+      where: activeLinkOf(resourceId, clientId),
+      include: { integration: true },
+      orderBy: { integration_id: "asc" },
+    });
+    return link?.integration ?? null;
   }
 
   async findResourceById(id: number) {
