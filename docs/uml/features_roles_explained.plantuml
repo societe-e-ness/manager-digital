@@ -1,0 +1,58 @@
+@startuml
+/' class Aaa {
+    -bbb : int
+    +ccc : string
+    #aa : float
+    +void addEntry(mmm : Entry)
+    +int setFactory(ddd : string)
+}
+class Factory {
+    #fff : string
+}
+class Entry {
+    -yyy : int
+}
+class Parent {
+}
+Aaa *--> "1..100" Entry : -entries
+Aaa o--> Factory : #factory
+Aaa o--> Parent : +parent '/
+
+class Fonctionnalité {
+    - slug: String
+    - label: String
+}
+
+class PackFonctionnalités {
+    - slug: String
+    - label: String
+}
+
+class Utilisateur {
+    - email: String
+    - name: String
+    - type: TypeUtilisateur
+}
+
+abstract "<<TypeUtilisateur>>" as TypeUtilisateur {
+    - slug: String
+    - label: String
+}
+
+class Site {
+    - domain: String 
+    - client_id: String
+}
+
+class ManagerDigital {}
+
+ManagerDigital --> Site : communique 
+
+PackFonctionnalités "1..n" --> "0..n" Fonctionnalité : contient
+PackFonctionnalités "0..n" --> "0..n" Site : gère
+
+Utilisateur "1..n" --> "0..n" PackFonctionnalités : possède
+Utilisateur --> TypeUtilisateur
+
+
+@enduml

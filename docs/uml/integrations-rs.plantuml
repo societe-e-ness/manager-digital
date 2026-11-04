@@ -5,17 +5,17 @@ title Étapes pour l'intégration Méta au Plugin d'actualités (optimiste)
 start
 :"Se connecter au Manager Digital";
 |#AntiqueWhite|Manager Digital|
-:Connexion SSO (auth.eness) par OAuth; <<#lightgrey>>
+:Connexion SSO (auth.eness) par OAuth;
 floating note left
     L'utilisateur pourra
     se connecter par magic link 
     au cas où.
 end note
-|#lightblue|Meta|
+|#lightgrey|Meta|
 :Connexion compte FB Business;
 :Autorisation page(s);
 |Manager Digital|
-:Pérennisation des données (tokens, Ressource RS, Site client...); <<#lightgrey>>
+:Pérennisation des données (tokens, Ressource RS, Site client...);
 |Plugin|
 :Pages connectées et disponibles !;
 :Générer et publier des actualités...;
