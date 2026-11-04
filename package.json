@@ -29,6 +29,9 @@
     },
     "@prisma/config": {
       "deepmerge-ts": "8.0.2"
+    },
+    "@nestjs/config": {
+      "dotenv@17.4.1": "17.4.2"
     }
   }
 }

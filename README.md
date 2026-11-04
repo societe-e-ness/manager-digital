@@ -111,6 +111,13 @@ Ces surcharges ne concernent que le CLI Prisma, pas le code exécuté par l'API.
 `prisma validate`, `prisma generate` et le build ont été vérifiés avec elles.
 À retirer si une future 7.x corrige ces dépendances.
 
+`@nestjs/config` 4.0.4 épingle `dotenv` en 17.4.1, alors que l'API (et Prisma) utilisent 17.4.2.
+Ce conflit empêchait npm de remonter `@nestjs/config` dans le `node_modules` racine : il restait dans
+`server/node_modules`, où le déploiement Vercel ne le trouve pas (`Cannot find module '@nestjs/config'`).
+La surcharge `"@nestjs/config": { "dotenv@17.4.1": "17.4.2" }` aligne la version (simple correctif de
+patch) ; elle ne vise que cette version, pas le `dotenv` 16 de `dotenv-expand`. Build et tests vérifiés.
+À retirer quand `@nestjs/config` passera à `dotenv` ≥ 17.4.2.
+
 Le CLI inclut aussi Prisma Studio, qui dépend de paquets `@visx/*` en `4.0.x-alpha`.
 Ils sont imposés par Prisma et ne sont pas utilisés par l'application.
 
