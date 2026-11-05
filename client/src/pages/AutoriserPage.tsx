@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useLocation } from 'react-router'
 import { API } from '../api.ts'
+// même style minimal que la page Réseaux sociaux (classes .rs)
+import './ReseauxSociauxPage.css'
 
 type Site = { id: number; domain: string; client: string }
 type Context = { client: string; redirectHost: string; sites: Site[] }
@@ -56,31 +58,50 @@ export function AutoriserPage() {
     }
   }
 
-  if (error) return <p>Autorisation impossible : {error}</p>
-  if (!context) return <p>Chargement…</p>
+  if (error)
+    return (
+      <main className="rs">
+        <h1>Autorisation du Plugin WP</h1>
+        <p className="rs-notice rs-notice-error">Autorisation impossible : {error}</p>
+      </main>
+    )
+  if (!context)
+    return (
+      <main className="rs">
+        <p className="rs-muted">Chargement…</p>
+      </main>
+    )
 
   return (
-    <main>
+    <main className="rs">
       <h1>Autoriser le {context.client}</h1>
-      <p>
-        Le {context.client} installé sur <strong>{context.redirectHost}</strong> demande à agir en votre nom sur ce Site.
-      </p>
-      {context.sites.length === 0 ? (
-        <p>Aucun de vos Sites ne correspond à {context.redirectHost}.</p>
-      ) : (
-        context.sites.map((site) => (
-          <label key={site.id}>
-            <input type="radio" name="site" checked={siteId === site.id} onChange={() => setSiteId(site.id)} />
-            {site.domain} ({site.client})
-          </label>
-        ))
-      )}
-      <button type="button" disabled={siteId === null} onClick={() => decide('allow')}>
-        Autoriser
-      </button>
-      <button type="button" onClick={() => decide('deny')}>
-        Refuser
-      </button>
+      <section className="rs-card">
+        <p className="rs-muted">
+          Le {context.client} installé sur <strong>{context.redirectHost}</strong> demande à agir en votre nom sur ce Site.
+        </p>
+        {context.sites.length === 0 ? (
+          <p className="rs-notice rs-notice-error">Aucun de vos Sites ne correspond à {context.redirectHost}.</p>
+        ) : (
+          <ul className="rs-list">
+            {context.sites.map((site) => (
+              <li key={site.id}>
+                <label>
+                  <input type="radio" name="site" checked={siteId === site.id} onChange={() => setSiteId(site.id)} />{' '}
+                  {site.domain} <span className="rs-muted">· {site.client}</span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="rs-actions">
+          <button type="button" onClick={() => decide('deny')}>
+            Refuser
+          </button>
+          <button type="button" className="rs-primary" disabled={siteId === null} onClick={() => decide('allow')}>
+            Autoriser
+          </button>
+        </div>
+      </section>
     </main>
   )
 }
