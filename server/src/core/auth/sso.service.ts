@@ -116,7 +116,9 @@ export class SsoService {
         idTokenExpected: true,
       });
     } catch (e) {
-      this.logger.warn(`Retour SSO refusé : ${e instanceof Error ? e.message : String(e)}`);
+      // erreur renvoyée par auth.eness (?error=…) : son code et sa description disent pourquoi
+      const detail = e instanceof client.AuthorizationResponseError ? ` (${e.error}: ${e.error_description ?? "sans description"})` : "";
+      this.logger.warn(`Retour SSO refusé : ${e instanceof Error ? e.message : String(e)}${detail}`);
       throw new ProblemException(
         HttpStatus.UNAUTHORIZED,
         "sso-failed",
