@@ -36,7 +36,7 @@
 .rs-table td:last-child { text-align: right; }
 .rs-actions { display: flex; gap: 0.5rem; justify-content: flex-end; }
 
-.rs button, .rs select {
+.rs button, .rs select, .rs input[type="email"] {
   font: inherit;
   font-size: 0.9rem;
   padding: 0.35rem 0.75rem;
@@ -49,6 +49,9 @@
 .rs .rs-primary { background: #2563eb; border-color: #2563eb; color: #fff; }
 .rs .rs-primary:hover { background: #1d4ed8; }
 .rs .rs-danger { color: #b91c1c; }
+.rs button:disabled { opacity: 0.5; cursor: not-allowed; }
+.rs-actions input { flex: 1; cursor: text; } /* champ email de la page de connexion */
+.rs-list + .rs-actions { margin-top: 0.75rem; } /* boutons sous une liste (page d'autorisation) */
 
 .rs-tag { display: inline-block; margin-right: 0.35rem; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.8rem; background: #f3f4f6; color: #4b5563; }
 .rs-tag-ok { background: #dcfce7; color: #166534; }

@@ -44,7 +44,7 @@ class Site {
     - client_id: String
 }
 
-class ManagerDigital {}
+class "**ManagerDigital**" as ManagerDigital {}
 
 ManagerDigital --> Site : communique 
 
@@ -53,6 +53,8 @@ PackFonctionnalités "0..n" --> "0..n" Site : gère
 
 Utilisateur "1..n" --> "0..n" PackFonctionnalités : possède
 Utilisateur --> TypeUtilisateur
+Utilisateur --> Site : possède
+Utilisateur --> ManagerDigital : utilise (stats site, etc.)
 
 
 @enduml

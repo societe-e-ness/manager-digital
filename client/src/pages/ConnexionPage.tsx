@@ -1,6 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { useSearchParams } from 'react-router'
 import { API } from '../api.ts'
+// même style minimal que la page Réseaux sociaux (classes .rs)
+import './ReseauxSociauxPage.css'
+
+// le seul message qui n'est pas une erreur
+const LINK_SENT = 'Si cet email est connu, un lien de connexion vient de vous être envoyé.'
 
 /** Seul un chemin local est un retour acceptable, sinon c'est une redirection ouverte. */
 function safeReturnTo(path: string | null) {
@@ -45,29 +50,45 @@ export function ConnexionPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, returnTo }),
       })
-      setMessage('Si cet email est connu, un lien de connexion vient de vous être envoyé.')
+      setMessage(LINK_SENT)
     } catch {
       setMessage('Manager Digital injoignable : réessayez dans un instant.')
     }
   }
 
-  if (token && !message) return <p>Connexion en cours…</p>
+  if (token && !message)
+    return (
+      <main className="rs">
+        <p className="rs-muted">Connexion en cours…</p>
+      </main>
+    )
 
   return (
-    <main>
+    <main className="rs">
       <h1>Connexion</h1>
-      {message && <p>{message}</p>}
-      <button
-        type="button"
-        onClick={() => (window.location.href = `${API}/auth/sso/login?returnTo=${encodeURIComponent(returnTo)}`)}
-      >
-        Se connecter avec le compte eness
-      </button>
-      <form onSubmit={sendMagicLink}>
-        <p>SSO indisponible ? Recevez un lien de connexion par email.</p>
-        <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" />
-        <button type="submit">Recevoir un lien</button>
-      </form>
+      {message && (
+        <p className={`rs-notice ${message === LINK_SENT ? 'rs-notice-ok' : 'rs-notice-error'}`}>{message}</p>
+      )}
+      <section className="rs-card">
+        <div className="rs-card-head">
+          <h2>Compte eness</h2>
+          <button
+            type="button"
+            className="rs-primary"
+            onClick={() => (window.location.href = `${API}/auth/sso/login?returnTo=${encodeURIComponent(returnTo)}`)}
+          >
+            Se connecter avec le compte eness
+          </button>
+        </div>
+      </section>
+      <section className="rs-card">
+        <h2>SSO indisponible ?</h2>
+        <p className="rs-muted">Recevez un lien de connexion par email.</p>
+        <form className="rs-actions" onSubmit={sendMagicLink}>
+          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" />
+          <button type="submit">Recevoir un lien</button>
+        </form>
+      </section>
     </main>
   )
 }
