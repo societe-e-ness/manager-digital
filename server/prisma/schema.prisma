@@ -340,8 +340,9 @@ model Publication {
   article_id      String // identifiant de l'Actualité côté WordPress
   article_url     String // lien de l'Actualité sur le Site
   resource_id     Int // la Ressource cible
+  format          String            @default("post") // post ou story (reel : ticket 14)
   text            String // le texte envoyé
-  image_count     Int               @default(0) // nombre d'images envoyées (non conservées : une relance doit les rejoindre)
+  images          Json              @default("[]") // les images envoyées : [{ url, mimeType, width, height, size }], réutilisées par une relance
   status          PublicationStatus @default(PENDING)
   error_type      String? // raison de l'échec, `type` stable (integration-expired, content-rejected…)
   error_detail    String?

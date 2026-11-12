@@ -10,7 +10,7 @@ import { givenOverride, givenSite } from "./support/rights";
 const PAGE_PUBLISH_SCOPES = ["pages_manage_posts", "pages_read_engagement", "pages_show_list"];
 const MB = 1024 * 1024;
 
-type Image = { name: string; bytes: Buffer; type?: string };
+type Image = { url: string; mimeType: string; width: number; height: number; size: number };
 type Target = { resourceId: number; text: string };
 
 /**
@@ -30,7 +30,14 @@ describe("Refus prévisibles avant Diffusion (HTTP)", () => {
   let token: string;
 
   const ARTICLE = { id: "42", url: "https://site-a.fr/2026/10/portes-ouvertes" };
-  const jpeg = (name = "photo.jpg", size = 100): Image => ({ name, bytes: Buffer.alloc(size, 1) });
+  /** Une image de la médiathèque WordPress, décrite par le Plugin WP. */
+  const jpeg = (name = "photo.jpg", size = 100_000, mimeType = "image/jpeg"): Image => ({
+    url: `https://site-a.fr/wp-content/uploads/${name}`,
+    mimeType,
+    width: 1200,
+    height: 800,
+    size,
+  });
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -63,7 +70,7 @@ describe("Refus prévisibles avant Diffusion (HTTP)", () => {
   async function givenResource(
     externalId: string,
     accesses: { externalUserId: string; pageToken: string; status?: "ACTIVE" | "EXPIRED"; scopes?: string[] }[],
-    type: "FACEBOOK_PAGE" | "INSTAGRAM_ACCOUNT" = "FACEBOOK_PAGE",
+    type: "FACEBOOK_PAGE" | "AD_ACCOUNT" = "FACEBOOK_PAGE",
   ) {
     const integrations = app.get(IntegrationsService);
     const resource = await db.resource.create({
@@ -86,13 +93,9 @@ describe("Refus prévisibles avant Diffusion (HTTP)", () => {
     return resource.id;
   }
 
-  /** La même requête multipart pour la vérification et pour la Diffusion. */
+  /** La même requête JSON pour la vérification et pour la Diffusion. */
   function send(path: "/plugin/broadcasts/check" | "/plugin/broadcasts", targets: Target[], images: Image[] = []) {
-    let req = asPlugin(app, token).post(path).field("actualite", JSON.stringify(ARTICLE)).field("targets", JSON.stringify(targets));
-    for (const image of images) {
-      req = req.attach("images", image.bytes, { filename: image.name, contentType: image.type ?? "image/jpeg" });
-    }
-    return req;
+    return asPlugin(app, token).post(path).send({ actualite: ARTICLE, images, targets });
   }
   const check = (targets: Target[], images: Image[] = []) => send("/plugin/broadcasts/check", targets, images);
   const broadcast = (targets: Target[], images: Image[] = []) => send("/plugin/broadcasts", targets, images);
@@ -121,18 +124,18 @@ describe("Refus prévisibles avant Diffusion (HTTP)", () => {
     [
       "format d'image non accepté par Facebook",
       {
-        images: [jpeg(), { name: "anime.webp", bytes: Buffer.alloc(100, 1), type: "image/webp" }],
-        refusal: { type: "image-format-unsupported", images: ["anime.webp"] },
+        images: [jpeg(), jpeg("anime.webp", 100_000, "image/webp")],
+        refusal: { type: "image-format-unsupported", images: [jpeg("anime.webp").url] },
       },
     ],
     [
       "image trop lourde pour Facebook",
-      { images: [jpeg("lourde.jpg", 4 * MB + 1)], refusal: { type: "image-too-large", maxBytes: 4 * MB, images: ["lourde.jpg"] } },
+      { images: [jpeg("lourde.jpg", 4 * MB + 1)], refusal: { type: "image-too-large", maxBytes: 4 * MB, images: [jpeg("lourde.jpg").url] } },
     ],
     [
-      "Ressource que l'on ne sait pas encore diffuser",
+      "Ressource qui ne se diffuse pas (compte publicitaire)",
       {
-        setup: () => givenResource("insta-1", [{ externalUserId: "meta-marie-ig", pageToken: "t" }], "INSTAGRAM_ACCOUNT"),
+        setup: () => givenResource("act-1", [{ externalUserId: "meta-marie-ads", pageToken: "t" }], "AD_ACCOUNT"),
         refusal: { type: "resource-type-unsupported" },
       },
     ],

@@ -95,18 +95,12 @@ describe("Échecs, relance et historique des Publications (HTTP)", () => {
     graph.on("GET", `/${postId}`, { id: postId, permalink_url: `https://www.facebook.com/${postId}` });
   }
 
-  function broadcast(targets: { resourceId: number; text: string }[], article = ARTICLE) {
-    return asPlugin(app, token)
-      .post("/plugin/broadcasts")
-      .field("actualite", JSON.stringify(article))
-      .field("targets", JSON.stringify(targets));
+  function broadcast(targets: { resourceId: number; text: string }[], article = ARTICLE, images: object[] = []) {
+    return asPlugin(app, token).post("/plugin/broadcasts").send({ actualite: article, images, targets });
   }
 
-  function retry(publicationId: number, images: { name: string; bytes: Buffer }[] = []) {
-    let req = asPlugin(app, token).post(`/plugin/publications/${publicationId}/retry`);
-    for (const image of images) req = req.attach("images", image.bytes, { filename: image.name, contentType: "image/jpeg" });
-    return req;
-  }
+  // la relance ne porte rien : le contenu (texte, lien, format, images) est enregistré avec la Publication
+  const retry = (publicationId: number) => asPlugin(app, token).post(`/plugin/publications/${publicationId}/retry`);
 
   const history = (articleId: string) => asPlugin(app, token).get(`/plugin/articles/${articleId}/publications`);
   const feedCalls = (page = "page-1") => graph.calls.filter((c) => c.path === `/${page}/feed`);
@@ -228,26 +222,21 @@ describe("Échecs, relance et historique des Publications (HTTP)", () => {
       expect(await db.publication.findMany()).toEqual([expect.objectContaining({ id, status: "SUCCEEDED" })]);
     });
 
-    it("renvoie les images que le Plugin WP joint à la relance", async () => {
-      const id = await givenFailedPublication();
-      await db.publication.update({ where: { id }, data: { image_count: 1 } }); // diffusée avec une image
+    it("renvoie les images enregistrées avec la Publication, sans que le Plugin WP les joigne", async () => {
+      const facade = { url: "https://site-a.fr/wp-content/uploads/facade.jpg", mimeType: "image/jpeg", width: 1200, height: 800, size: 300_000 };
+      graph.on("POST", "/page-1/photos", { error: { message: "Service unavailable", code: 2 } }, 500);
+      const [failed] = (await broadcast([{ resourceId: pageId, text: "En images" }], ARTICLE, [facade]).expect(201)).body.publications;
+      expect(failed).toMatchObject({ status: "FAILED", error_type: "network-unavailable" });
+      graph.reset();
+      graph.calls.length = 0;
       graph.on("POST", "/page-1/photos", { id: "photo-1" });
       metaAcceptsPost("page-1", "page-marie");
 
-      await retry(id, [{ name: "facade.jpg", bytes: Buffer.from("image-facade") }]).expect(200);
+      await retry(failed.id).expect(200);
 
-      expect(graph.calls.filter((c) => c.path === "/page-1/photos")).toHaveLength(1);
+      const [photo] = graph.calls.filter((c) => c.path === "/page-1/photos");
+      expect(new URLSearchParams(photo.body).get("url")).toBe(facade.url);
       expect(new URLSearchParams(feedCalls()[0].body).get("attached_media[0]")).toBe(JSON.stringify({ media_fbid: "photo-1" }));
-    });
-
-    it("exige les images d'origine : elles ne sont pas conservées (422), sans rien envoyer", async () => {
-      const id = await givenFailedPublication();
-      await db.publication.update({ where: { id }, data: { image_count: 2 } });
-
-      const res = await retry(id, [{ name: "facade.jpg", bytes: Buffer.from("image-facade") }]).expect(422);
-
-      expect(res.body).toMatchObject({ type: "retry-images-mismatch", imageCount: 2 });
-      expect(graph.calls).toHaveLength(0);
     });
 
     it("refuse de relancer une Publication en cours d'envoi (409)", async () => {

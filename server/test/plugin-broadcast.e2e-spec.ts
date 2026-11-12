@@ -86,13 +86,17 @@ describe("Diffusion d'une Actualité sur une page Facebook (HTTP)", () => {
     graph.on("GET", `/${postId}`, { id: postId, permalink_url: `https://www.facebook.com/${postId}` });
   }
 
-  function broadcast(targets: { resourceId: number; text: string }[], images: { name: string; bytes: Buffer }[] = []) {
-    let req = asPlugin(app, token)
-      .post("/plugin/broadcasts")
-      .field("actualite", JSON.stringify(ARTICLE))
-      .field("targets", JSON.stringify(targets));
-    for (const image of images) req = req.attach("images", image.bytes, { filename: image.name, contentType: "image/jpeg" });
-    return req;
+  /** Une image de la médiathèque WordPress, décrite par le Plugin WP. */
+  const image = (name: string) => ({
+    url: `https://site-a.fr/wp-content/uploads/${name}`,
+    mimeType: "image/jpeg",
+    width: 1200,
+    height: 800,
+    size: 300_000,
+  });
+
+  function broadcast(targets: { resourceId: number; text: string }[], images: ReturnType<typeof image>[] = []) {
+    return asPlugin(app, token).post("/plugin/broadcasts").send({ actualite: ARTICLE, images, targets });
   }
 
   const feedCalls = () => graph.calls.filter((c) => c.path === "/page-1/feed");
@@ -137,24 +141,22 @@ describe("Diffusion d'une Actualité sur une page Facebook (HTTP)", () => {
     expect(trace.published_at).not.toBeNull();
   });
 
-  it("envoie les images directement à Facebook et les joint au post, avec le lien dans le texte", async () => {
+  it("envoie les images à Facebook par leur URL et les joint au post, avec le lien dans le texte", async () => {
     graph.on("POST", "/page-1/photos", { id: "photo-1" });
     metaAcceptsPost();
-    const images = [
-      { name: "facade.jpg", bytes: Buffer.from("image-facade") },
-      { name: "equipe.jpg", bytes: Buffer.from("image-equipe-plus-longue") },
-    ];
+    const images = [image("facade.jpg"), image("equipe.jpg")];
 
-    await broadcast([{ resourceId: pageId, text: "En images" }], images).expect(201);
+    const res = await broadcast([{ resourceId: pageId, text: "En images" }], images).expect(201);
 
     const photos = graph.calls.filter((c) => c.path === "/page-1/photos");
     expect(photos).toHaveLength(2);
     for (const [i, call] of photos.entries()) {
       expect(call.query.get("access_token")).toBe("page-token");
-      expect(call.form?.get("published")).toBe("false");
-      const source = call.form?.get("source") as Blob;
-      expect(Buffer.from(await source.arrayBuffer())).toEqual(images[i].bytes);
+      const sentPhoto = new URLSearchParams(call.body);
+      expect(sentPhoto.get("published")).toBe("false");
+      expect(sentPhoto.get("url")).toBe(images[i].url); // Meta va la chercher : elle ne transite pas par nous
     }
+    expect(res.body.publications[0]).toMatchObject({ format: "post", images }); // enregistrées, pour une relance
 
     const sent = new URLSearchParams(feedCalls()[0].body);
     expect(sent.get("message")).toBe(`En images\n\n${ARTICLE.url}`);
@@ -298,11 +300,10 @@ describe("Diffusion d'une Actualité sur une page Facebook (HTTP)", () => {
   it.each([
     ["sans cible", { actualite: ARTICLE, targets: [] }],
     ["sans lien d'Actualité", { actualite: { id: "42" }, targets: [{ resourceId: 1, text: "x" }] }],
-    ["avec un JSON illisible", { actualite: "{pas du json", targets: [{ resourceId: 1, text: "x" }] }],
-  ])("refuse une requête mal formée %s (400)", async (_, fields) => {
-    const req = asPlugin(app, token).post("/plugin/broadcasts");
-    for (const [name, value] of Object.entries(fields)) req.field(name, typeof value === "string" ? value : JSON.stringify(value));
-    const res = await req.expect(400);
+    ["avec une Actualité qui n'est pas un objet", { actualite: "{pas du json", targets: [{ resourceId: 1, text: "x" }] }],
+    ["avec un format qui n'est pas une chaîne", { actualite: ARTICLE, targets: [{ resourceId: 1, text: "x", format: 3 }] }],
+  ])("refuse une requête mal formée %s (400)", async (_, body) => {
+    const res = await asPlugin(app, token).post("/plugin/broadcasts").send(body).expect(400);
     expect(res.body.status).toBe(400);
     expect(graph.calls).toHaveLength(0);
   });

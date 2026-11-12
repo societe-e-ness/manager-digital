@@ -21,6 +21,16 @@ export interface NetworkPost {
  */
 export const PAGE_PUBLISH_SCOPES = ["pages_manage_posts", "pages_read_engagement", "pages_show_list"];
 
+/**
+ * Les permissions Meta exigées pour publier sur un compte Instagram lié à une page, avec la connexion
+ * Facebook (« Content Publishing »). Demandées à la connexion, et vérifiées avant une Diffusion.
+ */
+export const INSTAGRAM_PUBLISH_SCOPES = ["instagram_basic", "instagram_content_publish", "pages_read_engagement"];
+
+// un conteneur Instagram (image) est en général prêt tout de suite : on l'attend quelques secondes au plus
+const CONTAINER_READY_ATTEMPTS = 4;
+const CONTAINER_READY_DELAY_MS = 1500;
+
 const STATE_TTL_MS = 10 * 60 * 1000;
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
@@ -62,6 +72,7 @@ export class MetaService {
         ...PAGE_PUBLISH_SCOPES, // liste des pages, lecture de leurs statistiques, publication
         "pages_read_user_content", // lecture du contenu des pages
         "instagram_basic", // lecture des comptes Instagram et de leurs médias
+        "instagram_content_publish", // publication sur Instagram (posts, stories)
       ].join(","),
       state,
     });
@@ -232,28 +243,21 @@ export class MetaService {
 
   /**
    * Publie sur une page Facebook avec son jeton de page. Sans image : un post avec le lien (aperçu).
-   * Avec images : chacune est envoyée en photo non publiée, puis un post les regroupe ; Facebook
-   * n'accepte alors pas de lien joint, il va dans le texte. Renvoie l'identifiant et le lien du post.
+   * Avec images : chacune est envoyée par son URL en photo non publiée (Meta va la chercher), puis
+   * un post les regroupe ; Facebook n'accepte alors pas de lien joint, il va dans le texte.
+   * Renvoie l'identifiant et le lien du post.
    */
-  async publishToPage(
-    integration: Integration,
-    pageToken: string,
-    pageExternalId: string,
-    post: { message: string; link: string; images: { buffer: Buffer; mimetype: string; filename: string }[] },
-  ) {
+  async publishToPage(integration: Integration, pageToken: string, pageExternalId: string, post: { message: string; link: string; imageUrls: string[] }) {
     const body = new URLSearchParams();
-    if (post.images.length === 0) {
+    if (post.imageUrls.length === 0) {
       body.set("message", post.message);
       body.set("link", post.link);
     } else {
       body.set("message", [post.message, post.link].filter(Boolean).join("\n\n"));
       const photos = await Promise.all(
-        post.images.map((image) => {
-          const form = new FormData();
-          form.set("source", new Blob([new Uint8Array(image.buffer)], { type: image.mimetype }), image.filename);
-          form.set("published", "false");
-          return this.graph(integration, `/${pageExternalId}/photos`, {}, pageToken, form);
-        }),
+        post.imageUrls.map((url) =>
+          this.graph(integration, `/${pageExternalId}/photos`, {}, pageToken, new URLSearchParams({ url, published: "false" })),
+        ),
       );
       photos.forEach((photo, i) => body.set(`attached_media[${i}]`, JSON.stringify({ media_fbid: photo.id })));
     }
@@ -266,6 +270,59 @@ export class MetaService {
       .then((details) => details.permalink_url as string)
       .catch(() => `https://www.facebook.com/${postId}`);
     return { postId, url };
+  }
+
+  /**
+   * Publie sur un compte Instagram avec le jeton de la personne. Meta va chercher les images à leur URL.
+   *  - post à une image : un conteneur avec l'image et la légende ;
+   *  - carrousel : un conteneur par image (sans légende), puis le carrousel avec la légende ;
+   *  - story : un conteneur STORIES, sans légende.
+   * Le conteneur est attendu jusqu'à ce qu'il soit prêt, puis publié. Renvoie l'identifiant et le lien.
+   */
+  async publishToInstagram(
+    integration: Integration,
+    igExternalId: string,
+    post: { format: "post" | "story"; caption: string; imageUrls: string[] },
+  ) {
+    const container = (params: Record<string, string>) =>
+      this.graph(integration, `/${igExternalId}/media`, {}, undefined, new URLSearchParams(params)).then((c) => c.id as string);
+
+    let containerId: string;
+    if (post.format === "story") {
+      containerId = await container({ image_url: post.imageUrls[0], media_type: "STORIES" });
+    } else if (post.imageUrls.length === 1) {
+      containerId = await container({ image_url: post.imageUrls[0], caption: post.caption });
+    } else {
+      // en parallèle : un carrousel de 10 images doit tenir dans la durée d'une requête
+      const children = await Promise.all(post.imageUrls.map((url) => container({ image_url: url, is_carousel_item: "true" })));
+      await Promise.all(children.map((child) => this.waitUntilReady(integration, child)));
+      containerId = await container({ media_type: "CAROUSEL", children: children.join(","), caption: post.caption });
+    }
+    await this.waitUntilReady(integration, containerId);
+
+    const published = await this.graph(integration, `/${igExternalId}/media_publish`, {}, undefined, new URLSearchParams({ creation_id: containerId }));
+    const mediaId = published.id as string;
+    // le média est en ligne : un échec de la lecture de son lien ne doit pas le faire passer pour raté
+    const url: string | null = await this.graph(integration, `/${mediaId}`, { fields: "permalink" })
+      .then((details) => details.permalink ?? null)
+      .catch(() => null);
+    return { postId: mediaId, url };
+  }
+
+  /** Attend qu'un conteneur Instagram soit prêt (status_code FINISHED). Refusé par Meta : contenu refusé. */
+  private async waitUntilReady(integration: Integration, containerId: string) {
+    for (let attempt = 1; ; attempt++) {
+      const { status_code, status } = await this.graph(integration, `/${containerId}`, { fields: "status_code,status" });
+      if (status_code === "FINISHED") return;
+      if (status_code === "ERROR") throw new MetaRequestError(400, undefined, `Conteneur Instagram refusé : ${status ?? ""}`);
+      // expiré, ou toujours en cours : rien n'est publié, une relance recréera le conteneur
+      if (status_code === "EXPIRED") throw new MetaRequestError(503, undefined, "Conteneur Instagram expiré avant sa publication");
+      if (attempt >= CONTAINER_READY_ATTEMPTS) {
+        // toujours en cours : rien n'est publié, la relance réessaiera
+        throw new MetaRequestError(503, undefined, `Conteneur Instagram toujours en traitement (${status_code})`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, CONTAINER_READY_DELAY_MS));
+    }
   }
 
   /**

@@ -1,19 +1,11 @@
-import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
-import { FilesInterceptor } from "@nestjs/platform-express";
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UseGuards } from "@nestjs/common";
 import { Public } from "../auth/session.guard";
 import { IntegrationsService } from "../integrations/integrations.service";
 import type { PluginPrincipal } from "../plugin-auth/plugin-auth.service";
 import { CurrentPlugin, PluginTokenGuard, RequiresAnyFeature } from "../plugin-auth/plugin-token.guard";
 import { Features } from "../rights/rights.service";
-import { BroadcastService, type UploadedImage } from "./broadcast.service";
+import { BroadcastService } from "./broadcast.service";
 import { PublicationsFeedService } from "./publications-feed.service";
-
-// images d'une Diffusion : gardées en mémoire le temps de l'envoi, jamais écrites sur disque.
-// Garde-fous techniques seulement, au-delà des limites des réseaux : celles-ci sont des refus
-// prévisibles (trop d'images, image trop lourde), voir broadcast-rules.ts.
-const MAX_IMAGES = 20;
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
-const IMAGES = FilesInterceptor("images", MAX_IMAGES, { limits: { fileSize: MAX_IMAGE_BYTES } });
 
 /**
  * Les routes appelées par le Plugin WP, avec son jeton (`Authorization: Bearer …`).
@@ -21,16 +13,17 @@ const IMAGES = FilesInterceptor("images", MAX_IMAGES, { limits: { fileSize: MAX_
  *
  *   GET  /plugin/resources  → les Ressources rattachées au Site, avec leur état (`accessible`) ;
  *                             exige social.read ou social.publish sur le Site
- *   POST /plugin/broadcasts → diffuse une Actualité (multipart/form-data) ; exige social.publish :
- *                             actualite = {"id":"42","url":"https://…"} (JSON)
- *                             targets   = [{"resourceId":1,"text":"…"}] (JSON, un texte par Ressource)
- *                             images    = fichiers (facultatif)
+ *   POST /plugin/broadcasts → diffuse une Actualité (JSON) ; exige social.publish :
+ *                             { actualite: { id: "42", url: "https://…" },
+ *                               images: [{ url: "https://…/photo.jpg", mimeType, width, height, size }] (facultatif),
+ *                               targets: [{ resourceId: 1, text: "…", format: "post" | "story" }] }
+ *                             Les images sont des URL publiques (médiathèque WordPress) : Meta va les chercher.
  *                             → 201 { publications } : une Publication diffusée par Ressource, avec son statut
  *                             → 422 broadcast-refused { targets } s'il y a un refus prévisible : rien n'est envoyé
  *   POST /plugin/broadcasts/check → la même requête, vérifiée sans rien envoyer ; exige social.publish :
  *                             → 200 { ok, targets: [{ resourceId, refusals: [{ type, detail, … }] }] }
- *   POST /plugin/publications/:id/retry → relance une Publication échouée du Site (même texte, même lien) ;
- *                             exige social.publish ; images = fichiers à joindre de nouveau (facultatif)
+ *   POST /plugin/publications/:id/retry → relance une Publication échouée du Site, avec le même contenu
+ *                             (texte, lien, format, images enregistrés) ; exige social.publish ; sans corps
  *                             → 200 la Publication mise à jour ; 409 si elle est réussie ou en cours d'envoi ;
  *                             422 broadcast-refused s'il y a un refus prévisible
  *   GET  /plugin/articles/:articleId/publications → l'historique d'une Actualité : ses Publications
@@ -72,13 +65,8 @@ export class PluginSocialController {
   @Post("publications/:id/retry")
   @HttpCode(200)
   @RequiresAnyFeature(Features.SOCIAL_PUBLISH)
-  @UseInterceptors(IMAGES)
-  retry(
-    @CurrentPlugin() plugin: PluginPrincipal,
-    @Param("id", ParseIntPipe) id: number,
-    @UploadedFiles() images: UploadedImage[] = [],
-  ) {
-    return this.broadcasts.retry(plugin, id, images);
+  retry(@CurrentPlugin() plugin: PluginPrincipal, @Param("id", ParseIntPipe) id: number) {
+    return this.broadcasts.retry(plugin, id);
   }
 
   @Get("articles/:articleId/publications")
@@ -90,24 +78,14 @@ export class PluginSocialController {
   @Post("broadcasts/check")
   @HttpCode(200)
   @RequiresAnyFeature(Features.SOCIAL_PUBLISH)
-  @UseInterceptors(IMAGES)
-  check(
-    @CurrentPlugin() plugin: PluginPrincipal,
-    @Body() fields: Record<string, unknown>,
-    @UploadedFiles() images: UploadedImage[] = [],
-  ) {
-    return this.broadcasts.check(plugin, this.broadcasts.parseRequest(fields ?? {}, images));
+  check(@CurrentPlugin() plugin: PluginPrincipal, @Body() body: unknown) {
+    return this.broadcasts.check(plugin, this.broadcasts.parseRequest(body));
   }
 
   @Post("broadcasts")
   @RequiresAnyFeature(Features.SOCIAL_PUBLISH)
-  @UseInterceptors(IMAGES)
-  async broadcast(
-    @CurrentPlugin() plugin: PluginPrincipal,
-    @Body() fields: Record<string, unknown>,
-    @UploadedFiles() images: UploadedImage[] = [],
-  ) {
-    const request = this.broadcasts.parseRequest(fields ?? {}, images);
+  async broadcast(@CurrentPlugin() plugin: PluginPrincipal, @Body() body: unknown) {
+    const request = this.broadcasts.parseRequest(body);
     return { publications: await this.broadcasts.broadcast(plugin, request) };
   }
 }

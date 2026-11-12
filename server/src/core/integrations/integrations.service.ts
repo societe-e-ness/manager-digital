@@ -44,13 +44,16 @@ function activeLinkOf(resourceId: number, clientId: number) {
   } satisfies Prisma.IntegrationResourceWhereInput;
 }
 
-/** Un lien actif qui porte un jeton de page, par une Intégration qui a accordé toutes ces permissions. */
-function pageAccessOf(resourceId: number, clientId: number, requiredScopes: string[]) {
+/**
+ * Un lien actif par une Intégration qui a accordé toutes ces permissions ; avec `pageToken`, un lien
+ * qui porte un jeton de page (Facebook). Un compte Instagram, lui, se publie avec le jeton de la personne.
+ */
+function pageAccessOf(resourceId: number, clientId: number, requiredScopes: string[], pageToken = true) {
   const active = activeLinkOf(resourceId, clientId);
   return {
     ...active,
     integration: { ...active.integration, scopes: { hasEvery: requiredScopes } },
-    access_token: { not: null },
+    ...(pageToken ? { access_token: { not: null } } : {}),
   } satisfies Prisma.IntegrationResourceWhereInput;
 }
 
@@ -241,13 +244,13 @@ export class IntegrationsService {
   }
 
   /** Tous ces accès, dans un ordre stable : si l'un est refusé par Meta, on passe au suivant (Diffusion). */
-  async activeAccesses(resourceId: number, clientId: number, requiredScopes: string[] = []) {
+  async activeAccesses(resourceId: number, clientId: number, requiredScopes: string[] = [], pageToken = true) {
     const links = await this.db.integrationResource.findMany({
-      where: pageAccessOf(resourceId, clientId, requiredScopes),
+      where: pageAccessOf(resourceId, clientId, requiredScopes, pageToken),
       include: { integration: true },
       orderBy: { integration_id: "asc" },
     });
-    return links.map((link) => ({ integration: link.integration, pageToken: this.decrypt(link.access_token!) }));
+    return links.map((link) => ({ integration: link.integration, pageToken: link.access_token ? this.decrypt(link.access_token) : null }));
   }
 
   /** Oublie le jeton de page d'une Intégration (Meta l'a refusé alors que celui de la personne est bon). */
@@ -259,8 +262,8 @@ export class IntegrationsService {
   }
 
   /** Comme activeAccess, sans lire le jeton : y a-t-il un tel accès ? (vérification avant Diffusion) */
-  async hasActiveAccess(resourceId: number, clientId: number, requiredScopes: string[] = []) {
-    return (await this.db.integrationResource.count({ where: pageAccessOf(resourceId, clientId, requiredScopes) })) > 0;
+  async hasActiveAccess(resourceId: number, clientId: number, requiredScopes: string[] = [], pageToken = true) {
+    return (await this.db.integrationResource.count({ where: pageAccessOf(resourceId, clientId, requiredScopes, pageToken) })) > 0;
   }
 
   /** Une Intégration ACTIVE de ce Client (ou de l'agence) qui mène à la Ressource (comptes Instagram : jeton de la personne). */
