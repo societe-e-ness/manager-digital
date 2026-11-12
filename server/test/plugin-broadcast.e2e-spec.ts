@@ -255,6 +255,8 @@ describe("Diffusion d'une Actualité sur une page Facebook (HTTP)", () => {
 
   it("un jeton de page refusé échoue sans marquer expirée l'Intégration de la personne", async () => {
     graph.on("POST", "/page-1/feed", { error: { message: "Error validating access token", code: 190 } }, 400);
+    // le jeton de la personne, lui, est toujours bon (vérifié après le refus du jeton de page : ticket 11)
+    graph.on("GET", "/me", { id: "meta-marie" });
 
     const res = await broadcast([{ resourceId: pageId, text: "Bonjour" }]).expect(201);
 

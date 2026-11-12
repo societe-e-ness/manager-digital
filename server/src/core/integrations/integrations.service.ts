@@ -44,6 +44,16 @@ function activeLinkOf(resourceId: number, clientId: number) {
   } satisfies Prisma.IntegrationResourceWhereInput;
 }
 
+/** Un lien actif qui porte un jeton de page, par une Intégration qui a accordé toutes ces permissions. */
+function pageAccessOf(resourceId: number, clientId: number, requiredScopes: string[]) {
+  const active = activeLinkOf(resourceId, clientId);
+  return {
+    ...active,
+    integration: { ...active.integration, scopes: { hasEvery: requiredScopes } },
+    access_token: { not: null },
+  } satisfies Prisma.IntegrationResourceWhereInput;
+}
+
 /** 409 : la Ressource est (ou vient d'être) rattachée à un autre Site. */
 export function resourceAlreadyAttached() {
   return new ProblemException(
@@ -222,30 +232,35 @@ export class IntegrationsService {
    * `requiredScopes` : seulement une Intégration qui a accordé toutes ces permissions Meta.
    */
   async activeAccess(resourceId: number, clientId: number, requiredScopes: string[] = []) {
-    const active = activeLinkOf(resourceId, clientId);
     const link = await this.db.integrationResource.findFirst({
-      where: {
-        ...active,
-        integration: { ...active.integration, scopes: { hasEvery: requiredScopes } },
-        access_token: { not: null },
-      },
+      where: pageAccessOf(resourceId, clientId, requiredScopes),
       include: { integration: true },
       orderBy: { integration_id: "asc" },
     });
     return link ? { integration: link.integration, pageToken: this.decrypt(link.access_token!) } : null;
   }
 
+  /** Tous ces accès, dans un ordre stable : si l'un est refusé par Meta, on passe au suivant (Diffusion). */
+  async activeAccesses(resourceId: number, clientId: number, requiredScopes: string[] = []) {
+    const links = await this.db.integrationResource.findMany({
+      where: pageAccessOf(resourceId, clientId, requiredScopes),
+      include: { integration: true },
+      orderBy: { integration_id: "asc" },
+    });
+    return links.map((link) => ({ integration: link.integration, pageToken: this.decrypt(link.access_token!) }));
+  }
+
+  /** Oublie le jeton de page d'une Intégration (Meta l'a refusé alors que celui de la personne est bon). */
+  forgetPageToken(integrationId: number, resourceId: number) {
+    return this.db.integrationResource.updateMany({
+      where: { integration_id: integrationId, resource_id: resourceId },
+      data: { access_token: null },
+    });
+  }
+
   /** Comme activeAccess, sans lire le jeton : y a-t-il un tel accès ? (vérification avant Diffusion) */
   async hasActiveAccess(resourceId: number, clientId: number, requiredScopes: string[] = []) {
-    const active = activeLinkOf(resourceId, clientId);
-    const count = await this.db.integrationResource.count({
-      where: {
-        ...active,
-        integration: { ...active.integration, scopes: { hasEvery: requiredScopes } },
-        access_token: { not: null },
-      },
-    });
-    return count > 0;
+    return (await this.db.integrationResource.count({ where: pageAccessOf(resourceId, clientId, requiredScopes) })) > 0;
   }
 
   /** Une Intégration ACTIVE de ce Client (ou de l'agence) qui mène à la Ressource (comptes Instagram : jeton de la personne). */

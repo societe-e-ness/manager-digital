@@ -341,6 +341,7 @@ model Publication {
   article_url     String // lien de l'Actualité sur le Site
   resource_id     Int // la Ressource cible
   text            String // le texte envoyé
+  image_count     Int               @default(0) // nombre d'images envoyées (non conservées : une relance doit les rejoindre)
   status          PublicationStatus @default(PENDING)
   error_type      String? // raison de l'échec, `type` stable (integration-expired, content-rejected…)
   error_detail    String?
@@ -348,6 +349,7 @@ model Publication {
   network_url     String? // lien vers la Publication sur le réseau
   author_id       Int? // null si le compte de l'auteur a été supprimé
   created_at      DateTime          @default(now())
+  attempted_at    DateTime          @default(now()) // début du dernier envoi (Diffusion ou relance)
   published_at    DateTime?
 
   site     Site     @relation(fields: [site_id], references: [id], onDelete: Cascade)

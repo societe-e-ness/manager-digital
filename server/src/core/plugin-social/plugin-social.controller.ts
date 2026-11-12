@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, ParseIntPipe, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
 import { FilesInterceptor } from "@nestjs/platform-express";
 import { Public } from "../auth/session.guard";
 import { IntegrationsService } from "../integrations/integrations.service";
@@ -29,6 +29,12 @@ const IMAGES = FilesInterceptor("images", MAX_IMAGES, { limits: { fileSize: MAX_
  *                             → 422 broadcast-refused { targets } s'il y a un refus prévisible : rien n'est envoyé
  *   POST /plugin/broadcasts/check → la même requête, vérifiée sans rien envoyer ; exige social.publish :
  *                             → 200 { ok, targets: [{ resourceId, refusals: [{ type, detail, … }] }] }
+ *   POST /plugin/publications/:id/retry → relance une Publication échouée du Site (même texte, même lien) ;
+ *                             exige social.publish ; images = fichiers à joindre de nouveau (facultatif)
+ *                             → 200 la Publication mise à jour ; 409 si elle est réussie ou en cours d'envoi ;
+ *                             422 broadcast-refused s'il y a un refus prévisible
+ *   GET  /plugin/articles/:articleId/publications → l'historique d'une Actualité : ses Publications
+ *                             diffusées sur ce Site, avec leur Ressource ; exige social.read ou social.publish
  *   GET  /plugin/publications?page=1&limit=20&resourceId=…
  *                           → les Publications récentes des pages et comptes Instagram du Site (lues chez
  *                             Meta, cache de quelques minutes), de la plus récente à la plus ancienne ;
@@ -61,6 +67,24 @@ export class PluginSocialController {
   async resources(@CurrentPlugin() plugin: PluginPrincipal) {
     const resources = await this.integrations.listSiteResources(plugin.siteId);
     return resources.map((r) => this.integrations.toPublicResource(r, "all"));
+  }
+
+  @Post("publications/:id/retry")
+  @HttpCode(200)
+  @RequiresAnyFeature(Features.SOCIAL_PUBLISH)
+  @UseInterceptors(IMAGES)
+  retry(
+    @CurrentPlugin() plugin: PluginPrincipal,
+    @Param("id", ParseIntPipe) id: number,
+    @UploadedFiles() images: UploadedImage[] = [],
+  ) {
+    return this.broadcasts.retry(plugin, id, images);
+  }
+
+  @Get("articles/:articleId/publications")
+  @RequiresAnyFeature(Features.SOCIAL_READ, Features.SOCIAL_PUBLISH)
+  history(@CurrentPlugin() plugin: PluginPrincipal, @Param("articleId") articleId: string) {
+    return this.broadcasts.history(plugin, articleId);
   }
 
   @Post("broadcasts/check")

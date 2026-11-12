@@ -269,6 +269,21 @@ export class MetaService {
   }
 
   /**
+   * Le jeton de la personne est-il toujours bon ? À demander quand un jeton de page obtenu par elle
+   * est refusé : la page a pu lui être retirée (son Intégration reste valable), ou son accès révoqué.
+   * Dans ce second cas, l'Intégration est marquée EXPIRED (par `graph`). Une autre erreur (panne)
+   * ne prouve rien : l'Intégration est laissée telle quelle.
+   */
+  async confirmUserToken(integration: Integration) {
+    try {
+      await this.graph(integration, "/me", { fields: "id" });
+      return true;
+    } catch (e) {
+      return !(e instanceof MetaAuthError);
+    }
+  }
+
+  /**
    * Métriques par campagne d'un compte publicitaire sur une période, traduites dans notre vocabulaire.
    * `integration` : n'importe quelle Intégration ACTIVE qui mène au compte (voir findActiveResources).
    */
