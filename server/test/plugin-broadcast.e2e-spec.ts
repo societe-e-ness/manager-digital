@@ -23,6 +23,8 @@ describe("Diffusion d'une Actualité sur une page Facebook (HTTP)", () => {
   let token: string;
 
   const ARTICLE = { id: "42", url: "https://site-a.fr/2026/10/portes-ouvertes" };
+  // permissions Meta exigées pour publier sur une page (sans elles : refus prévisible, voir plugin-broadcast-check)
+  const PAGE_PUBLISH_SCOPES = ["pages_manage_posts", "pages_read_engagement", "pages_show_list"];
 
   beforeAll(async () => {
     app = await createTestApp();
@@ -67,7 +69,7 @@ describe("Diffusion d'une Actualité sur une page Facebook (HTTP)", () => {
           provider: "META",
           external_user_id: access.externalUserId,
           access_token: integrations.encrypt("user-token"),
-          scopes: ["pages_manage_posts"],
+          scopes: PAGE_PUBLISH_SCOPES,
           status: access.status ?? "ACTIVE",
           client_id: clientA,
           created_by_id: marieId,
@@ -200,7 +202,7 @@ describe("Diffusion d'une Actualité sur une page Facebook (HTTP)", () => {
           provider: "META",
           external_user_id: externalUserId,
           access_token: integrations.encrypt("user-token"),
-          scopes: [],
+          scopes: PAGE_PUBLISH_SCOPES,
           status,
           client_id: clientA,
           created_by_id: marieId,
@@ -228,7 +230,7 @@ describe("Diffusion d'une Actualité sur une page Facebook (HTTP)", () => {
           provider: "META",
           external_user_id: externalUserId,
           access_token: integrations.encrypt("user-token"),
-          scopes: [],
+          scopes: PAGE_PUBLISH_SCOPES,
           client_id: clientId,
           created_by_id: marieId,
           resources: { create: { resource_id: pageId, access_token: integrations.encrypt(pageToken) } },

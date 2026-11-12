@@ -1,4 +1,4 @@
-import { Body, Controller, Get, ParseIntPipe, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, ParseIntPipe, Post, Query, UploadedFiles, UseGuards, UseInterceptors } from "@nestjs/common";
 import { FilesInterceptor } from "@nestjs/platform-express";
 import { Public } from "../auth/session.guard";
 import { IntegrationsService } from "../integrations/integrations.service";
@@ -8,9 +8,12 @@ import { Features } from "../rights/rights.service";
 import { BroadcastService, type UploadedImage } from "./broadcast.service";
 import { PublicationsFeedService } from "./publications-feed.service";
 
-// images d'une Diffusion : gardées en mémoire le temps de l'envoi, jamais écrites sur disque
-const MAX_IMAGES = 10;
+// images d'une Diffusion : gardées en mémoire le temps de l'envoi, jamais écrites sur disque.
+// Garde-fous techniques seulement, au-delà des limites des réseaux : celles-ci sont des refus
+// prévisibles (trop d'images, image trop lourde), voir broadcast-rules.ts.
+const MAX_IMAGES = 20;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const IMAGES = FilesInterceptor("images", MAX_IMAGES, { limits: { fileSize: MAX_IMAGE_BYTES } });
 
 /**
  * Les routes appelées par le Plugin WP, avec son jeton (`Authorization: Bearer …`).
@@ -21,8 +24,11 @@ const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
  *   POST /plugin/broadcasts → diffuse une Actualité (multipart/form-data) ; exige social.publish :
  *                             actualite = {"id":"42","url":"https://…"} (JSON)
  *                             targets   = [{"resourceId":1,"text":"…"}] (JSON, un texte par Ressource)
- *                             images    = fichiers (facultatif, 10 au plus)
+ *                             images    = fichiers (facultatif)
  *                             → 201 { publications } : une Publication diffusée par Ressource, avec son statut
+ *                             → 422 broadcast-refused { targets } s'il y a un refus prévisible : rien n'est envoyé
+ *   POST /plugin/broadcasts/check → la même requête, vérifiée sans rien envoyer ; exige social.publish :
+ *                             → 200 { ok, targets: [{ resourceId, refusals: [{ type, detail, … }] }] }
  *   GET  /plugin/publications?page=1&limit=20&resourceId=…
  *                           → les Publications récentes des pages et comptes Instagram du Site (lues chez
  *                             Meta, cache de quelques minutes), de la plus récente à la plus ancienne ;
@@ -57,9 +63,21 @@ export class PluginSocialController {
     return resources.map((r) => this.integrations.toPublicResource(r, "all"));
   }
 
+  @Post("broadcasts/check")
+  @HttpCode(200)
+  @RequiresAnyFeature(Features.SOCIAL_PUBLISH)
+  @UseInterceptors(IMAGES)
+  check(
+    @CurrentPlugin() plugin: PluginPrincipal,
+    @Body() fields: Record<string, unknown>,
+    @UploadedFiles() images: UploadedImage[] = [],
+  ) {
+    return this.broadcasts.check(plugin, this.broadcasts.parseRequest(fields ?? {}, images));
+  }
+
   @Post("broadcasts")
   @RequiresAnyFeature(Features.SOCIAL_PUBLISH)
-  @UseInterceptors(FilesInterceptor("images", MAX_IMAGES, { limits: { fileSize: MAX_IMAGE_BYTES } }))
+  @UseInterceptors(IMAGES)
   async broadcast(
     @CurrentPlugin() plugin: PluginPrincipal,
     @Body() fields: Record<string, unknown>,

@@ -5,12 +5,20 @@ import { IntegrationsService } from "../integrations/integrations.service";
 import { MetaService, metaFailureType } from "../integrations/meta.service";
 import type { PluginPrincipal } from "../plugin-auth/plugin-auth.service";
 import { ProblemException } from "../problems/problem.exception";
+import { contentRefusals, NETWORK_RULES, type Refusal } from "./broadcast-rules";
 
 /** Une image reçue du Plugin WP (multipart), gardée en mémoire le temps de la Diffusion. */
 export interface UploadedImage {
   buffer: Buffer;
   mimetype: string;
   originalname: string;
+  size: number;
+}
+
+/** Le résultat de la vérification : les refus prévisibles de chaque Ressource cible. */
+export interface BroadcastCheck {
+  ok: boolean;
+  targets: { resourceId: number; refusals: Refusal[] }[];
 }
 
 /** Une Diffusion : une Actualité vers des Ressources du Site, avec un texte par Ressource. */
@@ -22,8 +30,15 @@ export interface BroadcastRequest {
 
 /**
  * Diffusion d'une Actualité : une Publication diffusée par Ressource cible, tracée avant l'envoi
- * (statut en cours) puis mise à jour (réussie ou échouée). L'échec d'une Ressource n'empêche pas
- * les autres.
+ * (statut en cours) puis mise à jour (réussie ou échouée).
+ *
+ * Deux sortes d'échecs :
+ *  - les refus prévisibles, déduits sans appeler Meta (Intégration expirée, permission manquante,
+ *    texte trop long, images non acceptées…) : un seul suffit à bloquer TOUTE la Diffusion, avant
+ *    tout envoi et sans rien tracer (422 `broadcast-refused`). Le Plugin WP peut les demander à
+ *    l'avance, sans rien envoyer (`check`) ;
+ *  - les échecs imprévisibles, renvoyés par Meta pendant l'envoi : ils ne bloquent que leur
+ *    Publication, tracée échouée ; les autres Ressources sont servies quand même.
  */
 @Injectable()
 export class BroadcastService {
@@ -67,9 +82,16 @@ export class BroadcastService {
     };
   }
 
-  /** social.publish sur le Site est vérifié par la garde du jeton, avant même la réception des images. */
-  async broadcast(plugin: PluginPrincipal, request: BroadcastRequest) {
-    // toutes les cibles doivent être rattachées au Site du jeton : sinon rien ne part
+  /**
+   * Les refus prévisibles de chaque Ressource cible, sans rien envoyer ni tracer. Une cible non
+   * rattachée au Site du jeton n'est pas un refus mais une demande invalide : 422 `resource-not-attached`.
+   */
+  async check(plugin: PluginPrincipal, request: BroadcastRequest): Promise<BroadcastCheck> {
+    return (await this.evaluate(plugin, request)).verdict;
+  }
+
+  /** La vérification, avec ce qu'elle a lu : les Ressources du Site et son Client, pour l'envoi qui suit. */
+  private async evaluate(plugin: PluginPrincipal, request: BroadcastRequest) {
     const resources = new Map((await this.integrations.listSiteResources(plugin.siteId)).map((r) => [r.id, r]));
     const notAttached = request.targets.map((t) => t.resourceId).filter((id) => !resources.has(id));
     if (notAttached.length > 0) {
@@ -81,21 +103,51 @@ export class BroadcastService {
         { resourceIds: notAttached },
       );
     }
-    const unsupported = request.targets.map((t) => t.resourceId).filter((id) => resources.get(id)!.type !== "FACEBOOK_PAGE");
-    if (unsupported.length > 0) {
+
+    const clientId = await this.integrations.siteClientId(plugin.siteId);
+    const targets = [];
+    for (const target of request.targets) {
+      const resource = resources.get(target.resourceId)!;
+      const rules = NETWORK_RULES[resource.type];
+      const refusals: Refusal[] = [];
+      if (!rules) {
+        refusals.push({ type: "resource-type-unsupported", detail: "Ce type de Ressource ne peut pas (encore) recevoir de Diffusion" });
+      } else {
+        // l'accès d'abord : sans Intégration active, inutile de parler de permissions
+        if (!(await this.integrations.hasActiveAccess(resource.id, clientId))) {
+          refusals.push({ type: "integration-expired", detail: "Aucune Intégration active ne mène à cette Ressource : reconnecter le compte Meta" });
+        } else if (!(await this.integrations.hasActiveAccess(resource.id, clientId, rules.scopes))) {
+          refusals.push({
+            type: "permission-missing",
+            detail: "Le compte Meta n'a pas accordé la permission de publier : le reconnecter pour l'accorder",
+            requiredScopes: rules.scopes,
+          });
+        }
+        refusals.push(...contentRefusals(rules, target.text, request.images));
+      }
+      targets.push({ resourceId: target.resourceId, refusals });
+    }
+    const verdict: BroadcastCheck = { ok: targets.every((t) => t.refusals.length === 0), targets };
+    return { verdict, resources, clientId };
+  }
+
+  /** social.publish sur le Site est vérifié par la garde du jeton, avant même la réception des images. */
+  async broadcast(plugin: PluginPrincipal, request: BroadcastRequest) {
+    const { verdict, resources, clientId } = await this.evaluate(plugin, request);
+    if (!verdict.ok) {
       throw new ProblemException(
         HttpStatus.UNPROCESSABLE_ENTITY,
-        "resource-type-unsupported",
-        "Ressource non prise en charge",
-        "Seules les pages Facebook peuvent recevoir une Diffusion pour l'instant",
-        { resourceIds: unsupported },
+        "broadcast-refused",
+        "Diffusion refusée",
+        "Au moins une Ressource cible refuserait cette Diffusion : rien n'a été envoyé",
+        { targets: verdict.targets },
       );
     }
 
-    const clientId = await this.integrations.siteClientId(plugin.siteId);
     const publications: Publication[] = [];
     for (const target of request.targets) {
-      publications.push(await this.publish(plugin, clientId, request, target, resources.get(target.resourceId)!.external_id));
+      const resource = resources.get(target.resourceId)!;
+      publications.push(await this.publish(plugin, clientId, request, target, resource.external_id, NETWORK_RULES[resource.type]!.scopes));
     }
     return publications;
   }
@@ -106,6 +158,7 @@ export class BroadcastService {
     request: BroadcastRequest,
     target: { resourceId: number; text: string },
     pageExternalId: string,
+    requiredScopes: string[],
   ) {
     const publication = await this.db.publication.create({
       data: {
@@ -119,7 +172,8 @@ export class BroadcastService {
     });
 
     try {
-      const access = await this.integrations.activeAccess(target.resourceId, clientId);
+      // une Intégration qui a accordé la publication (la vérification a montré qu'il y en avait une)
+      const access = await this.integrations.activeAccess(target.resourceId, clientId, requiredScopes);
       if (!access) {
         return this.fail(publication.id, "integration-expired", "Aucune Intégration active ne mène à cette Ressource");
       }

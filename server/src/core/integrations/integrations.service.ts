@@ -219,14 +219,33 @@ export class IntegrationsService {
   /**
    * Un accès actif à la Ressource pour un Client : une Intégration ACTIVE de ce Client (ou de l'agence)
    * qui y mène, et le jeton de page obtenu par elle. Jamais l'accès Meta d'un autre Client.
+   * `requiredScopes` : seulement une Intégration qui a accordé toutes ces permissions Meta.
    */
-  async activeAccess(resourceId: number, clientId: number) {
+  async activeAccess(resourceId: number, clientId: number, requiredScopes: string[] = []) {
+    const active = activeLinkOf(resourceId, clientId);
     const link = await this.db.integrationResource.findFirst({
-      where: { ...activeLinkOf(resourceId, clientId), access_token: { not: null } },
+      where: {
+        ...active,
+        integration: { ...active.integration, scopes: { hasEvery: requiredScopes } },
+        access_token: { not: null },
+      },
       include: { integration: true },
       orderBy: { integration_id: "asc" },
     });
     return link ? { integration: link.integration, pageToken: this.decrypt(link.access_token!) } : null;
+  }
+
+  /** Comme activeAccess, sans lire le jeton : y a-t-il un tel accès ? (vérification avant Diffusion) */
+  async hasActiveAccess(resourceId: number, clientId: number, requiredScopes: string[] = []) {
+    const active = activeLinkOf(resourceId, clientId);
+    const count = await this.db.integrationResource.count({
+      where: {
+        ...active,
+        integration: { ...active.integration, scopes: { hasEvery: requiredScopes } },
+        access_token: { not: null },
+      },
+    });
+    return count > 0;
   }
 
   /** Une Intégration ACTIVE de ce Client (ou de l'agence) qui mène à la Ressource (comptes Instagram : jeton de la personne). */

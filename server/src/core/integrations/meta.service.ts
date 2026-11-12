@@ -15,6 +15,12 @@ export interface NetworkPost {
   date: string; // ISO 8601
   url: string; // lien vers la Publication d'origine
 }
+/**
+ * Les permissions Meta exigées pour publier sur une page Facebook, photos comprises (Graph API,
+ * « Page Feed » et « Page Photos »). Demandées à la connexion, et vérifiées avant une Diffusion.
+ */
+export const PAGE_PUBLISH_SCOPES = ["pages_manage_posts", "pages_read_engagement", "pages_show_list"];
+
 const STATE_TTL_MS = 10 * 60 * 1000;
 const REFRESH_MARGIN_MS = 5 * 60 * 1000;
 
@@ -53,10 +59,8 @@ export class MetaService {
       scope: [
         "ads_read",
         "business_management",
-        "pages_show_list",
-        "pages_read_engagement",
+        ...PAGE_PUBLISH_SCOPES, // liste des pages, lecture de leurs statistiques, publication
         "pages_read_user_content", // lecture du contenu des pages
-        "pages_manage_posts", // publication sur les pages
         "instagram_basic", // lecture des comptes Instagram et de leurs médias
       ].join(","),
       state,
