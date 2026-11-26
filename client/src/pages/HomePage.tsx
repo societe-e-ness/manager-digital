@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { API } from '../api.ts'
+// même style minimal que la page Réseaux sociaux (classes .rs)
+import './ReseauxSociauxPage.css'
 
 type User = { id: number; email: string; name: string | null; type: 'AGENCY' | 'CLIENT' }
 
@@ -26,26 +28,44 @@ export function HomePage() {
   }
 
   return (
-    <main>
+    <main className="rs">
       <h1>Manager Digital</h1>
-      {user === undefined && <p>Vérification de la connexion…</p>}
+      {user === undefined && <p className="rs-muted">Vérification de la connexion…</p>}
       {user === null && (
-        // navigation complète (pas un fetch) : l'API redirige vers auth.eness, qui revient ici
-        <button type="button" onClick={() => (window.location.href = `${API}/auth/sso/login?returnTo=/`)}>
-          Se connecter
-        </button>
+        <section className="rs-card">
+          <div className="rs-card-head">
+            <h2>Connexion</h2>
+            <button
+              type="button"
+              className="rs-primary"
+              // navigation complète (pas un fetch) : l'API redirige vers auth.eness, qui revient ici
+              onClick={() => (window.location.href = `${API}/auth/sso/login?returnTo=/`)}
+            >
+              Se connecter
+            </button>
+          </div>
+        </section>
       )}
       {user && (
         <>
-          <p>
-            Connecté : {user.name ?? user.email} ({user.email})
-          </p>
-          <p>
-            <a href="/reseaux-sociaux">Réseaux sociaux</a>
-          </p>
-          <button type="button" onClick={logout}>
-            Se déconnecter
-          </button>
+          <section className="rs-card">
+            <div className="rs-card-head">
+              <h2>
+                {user.name ?? user.email} <span className="rs-muted">· {user.email}</span>
+              </h2>
+              <button type="button" onClick={logout}>
+                Se déconnecter
+              </button>
+            </div>
+          </section>
+          <section className="rs-card">
+            <div className="rs-card-head">
+              <h2>Réseaux sociaux</h2>
+              <button type="button" className="rs-primary" onClick={() => (window.location.href = '/reseaux-sociaux')}>
+                Ouvrir
+              </button>
+            </div>
+          </section>
         </>
       )}
     </main>

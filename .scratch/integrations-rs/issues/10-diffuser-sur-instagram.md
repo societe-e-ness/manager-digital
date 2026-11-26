@@ -1,14 +1,33 @@
-# 10: Diffuser sur Instagram
+# 10: Diffuser sur Instagram (posts et stories)
 
-**What to build:** Une Actualité peut être diffusée vers un compte Instagram rattaché au Site. Instagram n'accepte que des URL d'images publiques : le Manager Digital expose les images reçues à une URL publique temporaire le temps de la publication, puis les supprime. Une Diffusion vers Instagram sans image est un refus prévisible. Les permissions Instagram (lecture du compte et publication) sont ajoutées à la connexion Meta.
+**What to build:** Une Actualité peut être diffusée vers un compte Instagram rattaché au Site, en **post** (une image, ou plusieurs en carrousel, avec une légende) ou en **story** (une image, sans texte ni lien). Les images ne transitent plus par le Manager Digital : le Plugin WP envoie les **URL publiques** des images de sa médiathèque, et Meta va les chercher lui-même, pour Instagram comme pour Facebook. Chaque cible porte un `format` (`post` par défaut, ou `story`), ce qui prépare les reels (ticket 14). Les permissions Instagram de publication sont ajoutées à la connexion Meta.
 
-**Blocked by:** 09 (Refus prévisibles avant Diffusion)
+**Contraintes (2026-11-12) :**
+- **Images en URL, pour tous les réseaux.** Fini le multipart : `POST /plugin/broadcasts` et `/plugin/broadcasts/check` reçoivent du JSON. Chaque image est décrite par le Plugin WP, qui connaît ces informations dans sa médiathèque : `{ url, mimeType, width, height, size }`. L'URL est HTTPS et absolue. Les refus prévisibles restent calculés sans appeler Meta ni télécharger les images, à partir de cette description. Une image mal décrite sera refusée par Meta, et cet échec sera tracé.
+- **Facebook passe aussi aux URL** : les photos sont envoyées à Meta par leur URL (paramètre `url`), et non plus en fichier. Le comportement du ticket 08 est inchangé par ailleurs.
+- **Relance (ticket 11)** : les URL des images sont enregistrées avec la Publication. La relance les réutilise, et le Plugin WP n'a plus rien à joindre (`image_count` et `retry-images-mismatch` disparaissent). Si l'image a été supprimée de WordPress entre-temps, Meta échoue et l'échec est tracé.
+- **Le plugin n'est pas encore développé** : ce changement de contrat (multipart → JSON) est sans conséquence. Les `type` d'erreurs existants ne changent pas.
 
-**Status:** ready-for-agent
+**Blocked by:** 09 (Refus prévisibles avant Diffusion), 11 (relance, dont le contrat change)
 
-- [ ] Une Diffusion avec image vers un compte Instagram rattaché crée une Publication Instagram, tracée avec son statut et son lien
-- [ ] L'image est servie à une URL publique non devinable, qui cesse de répondre une fois la publication terminée, réussie ou non
-- [ ] Une Diffusion vers Instagram sans image est bloquée par la vérification préalable (`type` stable « image requise »)
-- [ ] Une Diffusion vers Facebook et Instagram à la fois crée une Publication par Ressource
-- [ ] La connexion Meta demande les permissions Instagram nécessaires
-- [ ] Des tests HTTP, avec le faux Graph, couvrent la publication (création du conteneur puis publication) et le refus sans image
+Décisions (2026-11-12) :
+- **Contrat** : `POST /plugin/broadcasts` et `/plugin/broadcasts/check` reçoivent du JSON `{ actualite, images, targets }`. Chaque image : `{ url (HTTPS), mimeType, width, height, size }` (400 `broadcast-invalid-request` si mal décrite ; le type MIME est ramené en minuscules). Chaque cible : `{ resourceId, text, format? }`, `format` valant `post` par défaut. `POST /plugin/publications/:id/retry` est sans corps : texte, lien, format et images sont enregistrés avec la Publication (colonnes `format` et `images`, migration `20261112150000_publication_formats`, qui remplace `image_count` du ticket 11 ; `down.sql` vérifié).
+- **Facebook** : les photos partent par leur URL (`/{page}/photos` avec `url` et `published=false`), le reste est inchangé.
+- **Instagram**, avec le jeton de la personne (pas de jeton de page) : post à une image (conteneur avec `image_url` et `caption`), carrousel (un conteneur par image avec `is_carousel_item`, créés en parallèle, puis un conteneur `CAROUSEL` avec `children` et la légende), story (`media_type=STORIES`, sans légende). Chaque conteneur est attendu jusqu'à `status_code=FINISHED` (4 essais, 1,5 s d'intervalle), puis `media_publish`, puis lecture du `permalink` (`network_url` à null si elle échoue : le média est en ligne quand même). Conteneur `ERROR` : `content-rejected` ; `EXPIRED` ou toujours en cours : `network-unavailable` (une relance recrée le conteneur).
+- **Règles Instagram** (doc « Content Publishing » et « IG User Media », Graph API v27) : permissions `instagram_basic`, `instagram_content_publish`, `pages_read_engagement` (`INSTAGRAM_PUBLISH_SCOPES`, ajoutées à la connexion Meta) ; JPEG seul, 8 Mo ; proportions d'un post entre 4:5 et 1,91:1 (arrondies au centième, comme Meta) ; légende de 2 200 caractères, 30 hashtags et 20 mentions au plus (un `#` ou un `@` au milieu d'un mot, comme une ancre d'URL ou un e-mail, ne compte pas) ; carrousel de 10 images (la doc dit 20, l'erreur 2207028 dit 10 : le plus strict) ; story : une image, texte vide.
+- **Nouveaux refus** (types stables) : `format-unsupported` (`supportedFormats`), `image-required`, `image-aspect-ratio` (`images`, `minRatio`, `maxRatio`), `too-many-hashtags`, `too-many-mentions`, `story-text-unsupported`. Les règles sont désormais rangées par réseau puis par format (`broadcast-rules.ts`). Une story vers une page Facebook est `format-unsupported` (ticket 14).
+- **Lien de l'Actualité** : jamais ajouté à la légende Instagram (non cliquable) ; le Plugin WP le met dans le texte s'il le veut.
+- **Repli d'Intégration** (ticket 11) : il s'applique aussi à Instagram. Un jeton refusé est celui de la personne : son Intégration est marquée expirée et on passe à la suivante.
+- **Limites laissées** : `media_publish` n'est pas idempotent (si Meta publie mais que la réponse se perd, une relance publierait un doublon) ; le quota de publications Instagram par 24 h (50 ou 100 selon les pages de la doc) n'est pas vérifié à l'avance (échec tracé) ; les Publications créées avant ce ticket n'ont pas leurs images enregistrées : une relance les renverrait sans images.
+
+**Status:** done
+
+- [x] La Diffusion, la vérification et la relance reçoivent les images en URL décrites (`url`, `mimeType`, `width`, `height`, `size`), en JSON. Facebook publie ses photos par URL, et les tests des tickets 08, 09 et 11 sont adaptés sans perdre de cas
+- [x] Chaque cible porte un `format` : `post` (par défaut) ou `story`. Tout autre format est un refus prévisible `format-unsupported`. Une story vers une page Facebook est `format-unsupported` pour l'instant (ticket 14)
+- [x] Un **post Instagram** (une image, ou un carrousel jusqu'à la limite de Meta) crée une Publication Instagram, tracée avec son statut et son lien : création du conteneur (et des éléments du carrousel), attente qu'il soit prêt, puis publication
+- [x] Une **story Instagram** (exactement une image) crée une Publication tracée de la même façon
+- [x] Refus prévisibles Instagram, avec des `type` stables : image requise (`image-required`), format d'image non accepté (JPEG seul, à vérifier dans la doc), proportions hors limites pour un post (`image-aspect-ratio`), légende trop longue, trop d'images (carrousel ; une seule image pour une story), texte non vide pour une story (`story-text-unsupported`), permission Instagram non accordée. Les limites exactes sont tirées de la documentation Meta à jour, avec la source citée
+- [x] Le lien de l'Actualité n'est pas ajouté à la légende Instagram (il n'y serait pas cliquable). Le Plugin WP le met dans le texte s'il le souhaite
+- [x] Une Diffusion vers Facebook et Instagram à la fois crée une Publication par Ressource. Le repli d'Intégration du ticket 11 s'applique aussi aux comptes Instagram
+- [x] La connexion Meta demande les permissions Instagram nécessaires à la publication (`instagram_content_publish`, et ce que la doc exige en plus)
+- [x] Des tests HTTP, avec le faux Graph, couvrent le post simple, le carrousel, la story, la publication par URL côté Facebook, la relance sans images à joindre, et chaque refus Instagram sans appel à Meta
