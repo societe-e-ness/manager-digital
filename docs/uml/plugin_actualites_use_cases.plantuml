@@ -9,7 +9,7 @@ package " Plugin Actualités " {
     usecase "Publier des actualités sur les RS du client" as UC2 #line.bold;
     usecase "Publier des actualités sur le site WP" as UC5 #line.bold;
     usecase "Lister les diffusions des RS du client" as UC3 #line.bold;
-    usecase "Adapter les contenus à l'identité du client" as UC6 #line.bold;
+    usecase "Adapter les contenus au <<profil éditorial>> du client" as UC6 #line.bold;
     usecase "Connecter ses comptes publicitaires" as UC4 #lightgrey
     
 }

@@ -82,6 +82,7 @@ npm run test:e2e -w server   # tests HTTP : application complète sur une base d
   Le client est généré dans `server/src/generated/prisma` (ignoré, régénéré au build).
 - Le runtime se connecte via le driver adapter `PrismaPg` (`server/src/core/database/database.service.ts`).
 - Les variables d'environnement sont chargées explicitement avec `dotenv`.
+- **RLS Supabase** : toute migration qui crée une table doit activer les RLS dessus (`ALTER TABLE "X" ENABLE ROW LEVEL SECURITY;`). Générer la migration avec `prisma migrate dev --create-only`, compléter le SQL, puis appliquer. Sans règle d'accès, l'API publique de Supabase ne voit rien. Prisma, propriétaire des tables, n'est pas concerné.
 
 ### ⚠️ Ne pas utiliser `@latest` pour Prisma
 

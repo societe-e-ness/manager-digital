@@ -193,6 +193,16 @@ describe("Refus prévisibles avant Diffusion (HTTP)", () => {
 
       expect(res.body).toMatchObject({ type: "resource-not-attached", resourceIds: [999] });
     });
+
+    it("refuse un corps multipart (ancien contrat) en demandant du JSON (400)", async () => {
+      const res = await asPlugin(app, token)
+        .post("/plugin/broadcasts/check")
+        .field("actualite", JSON.stringify(ARTICLE))
+        .field("targets", JSON.stringify([{ resourceId: pageId, text: "Bonjour" }]))
+        .expect(400);
+
+      expect(res.body).toMatchObject({ type: "broadcast-invalid-request", detail: expect.stringContaining("Corps JSON attendu") });
+    });
   });
 
   describe("Diffusion", () => {

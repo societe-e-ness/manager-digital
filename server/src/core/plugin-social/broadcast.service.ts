@@ -58,7 +58,11 @@ export class BroadcastService {
   parseRequest(body: unknown): BroadcastRequest {
     const invalid = (detail: string) =>
       new ProblemException(HttpStatus.BAD_REQUEST, "broadcast-invalid-request", "Diffusion invalide", detail);
-    const fields = (body ?? {}) as Record<string, any>;
+    // un corps multipart (l'ancien contrat) n'est pas lu : il arrive vide
+    if (typeof body !== "object" || body === null || Array.isArray(body) || Object.keys(body).length === 0) {
+      throw invalid("Corps JSON attendu (Content-Type: application/json) : le multipart n'est plus accepté, les images s'envoient par URL");
+    }
+    const fields = body as Record<string, any>;
 
     const article = fields.actualite;
     const articleId = typeof article?.id === "number" ? String(article.id) : article?.id;

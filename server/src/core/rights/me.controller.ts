@@ -10,6 +10,11 @@ import { RightsService } from "./rights.service";
 export class MeController {
   constructor(private readonly rights: RightsService) {}
 
+  @Get()
+  me(@CurrentUser() user: AuthenticatedUser) {
+    return { user };
+  }
+
   @Get("clients")
   clients(@CurrentUser() user: AuthenticatedUser) {
     return this.rights.visibleClientsWithSites(user);
